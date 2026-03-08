@@ -1,6 +1,7 @@
 """
-Hub Identification in the HCP SC Consensus Network
-====================================================
+Hub Identification in the HCP SC Consensus Network (82 regions)
+================================================================
+Full 82×82 matrix: cortico-cortical + subcortico-cortical + subcortico-subcortical.
 Traditional + Complex Contagion centrality measures.
 """
 import numpy as np
@@ -12,18 +13,37 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from enigmatoolbox.datasets import load_sc
 
-sc_ctx, sc_ctx_labels, _, _ = load_sc()
-labels = list(sc_ctx_labels)
-N = sc_ctx.shape[0]
+# =============================================================================
+# Load and build full 82×82 SC matrix
+# =============================================================================
+sc_ctx, sc_ctx_labels, sc_sctx, sc_sctx_labels = load_sc()
 
+n_ctx  = sc_ctx.shape[0]   # 68 cortical regions
+n_sctx = sc_sctx.shape[0]  # 14 subcortical regions
+N      = n_ctx + n_sctx    # 82 total regions
+
+# Full 82×82 matrix
+# [ ctx-ctx  (68×68) | ctx-sctx  (68×14) ]
+# [ sctx-ctx (14×68) | sctx-sctx (14×14) <- zeros ]
+sc_full = np.zeros((N, N))
+sc_full[:n_ctx, :n_ctx] = sc_ctx
+sc_full[:n_ctx, n_ctx:] = sc_sctx.T
+sc_full[n_ctx:, :n_ctx] = sc_sctx
+
+labels = list(sc_ctx_labels) + list(sc_sctx_labels)
+
+# Build graph
 G = nx.Graph()
 for i in range(N):
     G.add_node(i, label=labels[i])
 for i in range(N):
     for j in range(i+1, N):
-        if sc_ctx[i,j] > 0:
-            G.add_edge(i, j, weight=sc_ctx[i,j])
+        if sc_full[i, j] > 0:
+            G.add_edge(i, j, weight=sc_full[i, j])
 
+# =============================================================================
+# Region metadata
+# =============================================================================
 lobe_map = {
     'bankssts':'Temporal','caudalanteriorcingulate':'Cingulate',
     'caudalmiddlefrontal':'Frontal','cuneus':'Occipital',
@@ -43,23 +63,39 @@ lobe_map = {
     'frontalpole':'Frontal','temporalpole':'Temporal',
     'transversetemporal':'Temporal','insula':'Insular',
 }
-lobes = [lobe_map.get(l[2:], 'Other') for l in labels]
+
+def get_lobe(label, idx):
+    if idx < n_ctx:
+        return lobe_map.get(label[2:], 'Other')
+    return 'Subcortical'
+
+def get_hemi(label):
+    return 'L' if label.startswith('L') else 'R'
+
+lobes = [get_lobe(labels[i], i) for i in range(N)]
+hemis = [get_hemi(l) for l in labels]
+
 lobe_colors = {
     'Frontal':'#e63946','Parietal':'#457b9d','Temporal':'#2a9d8f',
     'Occipital':'#e9c46a','Cingulate':'#f4a261','Insular':'#8338ec',
+    'Subcortical':'#6c757d',
 }
 
-# === TRADITIONAL CENTRALITY ===
+# =============================================================================
+# TRADITIONAL CENTRALITY
+# =============================================================================
 inv_weight = {(u,v): 1.0/d['weight'] for u,v,d in G.edges(data=True)}
 nx.set_edge_attributes(G, {k: {'inv_weight': v} for k,v in inv_weight.items()})
 
-degree_cent = nx.degree_centrality(G)
-node_strength = dict(G.degree(weight='weight'))
-betweenness_cent = nx.betweenness_centrality(G, weight='inv_weight', normalized=True)
-closeness_cent = nx.closeness_centrality(G, distance='inv_weight')
-eigenvector_cent = nx.eigenvector_centrality(G, max_iter=1000, weight='weight')
+degree_cent     = nx.degree_centrality(G)
+node_strength   = dict(G.degree(weight='weight'))
+betweenness_cent= nx.betweenness_centrality(G, weight='inv_weight', normalized=True)
+closeness_cent  = nx.closeness_centrality(G, distance='inv_weight')
+eigenvector_cent= nx.eigenvector_centrality(G, max_iter=1000, weight='weight')
 
-# === COMPLEX CONTAGION CENTRALITY (Guilbeault & Centola 2021) ===
+# =============================================================================
+# COMPLEX CONTAGION CENTRALITY (Guilbeault & Centola 2021)
+# =============================================================================
 def complex_closeness_centrality(adj, threshold=2):
     """
     For complex contagion with threshold T, a node activates only when >= T
@@ -75,7 +111,6 @@ def complex_closeness_centrality(adj, threshold=2):
     for seed in range(n):
         active = np.zeros(n, dtype=bool)
         active[seed] = True
-        # Seed cluster: activate (T-1) strongest neighbors
         neighbors = np.where(adj[seed] > 0)[0]
         if len(neighbors) > 0:
             sorted_n = neighbors[np.argsort(adj[seed, neighbors])[::-1]]
@@ -129,15 +164,18 @@ def complex_betweenness_centrality(adj, threshold=2):
     return cb
 
 print("Computing complex centrality (T=2)...")
-cc_T2 = complex_closeness_centrality(sc_ctx, 2)
-cb_T2 = complex_betweenness_centrality(sc_ctx, 2)
+cc_T2 = complex_closeness_centrality(sc_full, 2)
+cb_T2 = complex_betweenness_centrality(sc_full, 2)
 print("Computing complex centrality (T=3)...")
-cc_T3 = complex_closeness_centrality(sc_ctx, 3)
+cc_T3 = complex_closeness_centrality(sc_full, 3)
 
-# === COMPILE RESULTS ===
+# =============================================================================
+# COMPILE RESULTS
+# =============================================================================
 df = pd.DataFrame({
     'Region': labels, 'Lobe': lobes,
-    'Hemisphere': ['L' if l.startswith('L_') else 'R' for l in labels],
+    'Hemisphere': hemis,
+    'Region_Type': ['Cortical']*n_ctx + ['Subcortical']*n_sctx,
     'Degree': [G.degree(i) for i in range(N)],
     'Degree_Cent': [degree_cent[i] for i in range(N)],
     'Strength': [node_strength[i] for i in range(N)],
@@ -158,13 +196,13 @@ measure_names = {
 }
 
 print("\n" + "="*72)
-print("TOP 5 HUBS BY EACH CENTRALITY MEASURE")
+print("TOP 5 HUBS BY EACH CENTRALITY MEASURE  (all 82 regions)")
 print("="*72)
 for col in centrality_cols:
-    top5 = df.nlargest(5, col)[['Region','Lobe',col]]
+    top5 = df.nlargest(5, col)[['Region','Region_Type','Lobe',col]]
     print(f"\n  {measure_names[col]}:")
     for _, row in top5.iterrows():
-        print(f"    {row['Region']:40s} {row['Lobe']:12s} {row[col]:.4f}")
+        print(f"    {row['Region']:40s} [{row['Region_Type']:11s}] {row['Lobe']:12s} {row[col]:.4f}")
 
 # Composite hub score
 for col in centrality_cols:
@@ -176,11 +214,16 @@ print("\n" + "="*72)
 print("TOP 10 COMPOSITE HUBS")
 print("="*72)
 for _, row in df.nlargest(10, 'Composite_Hub').iterrows():
-    print(f"  {row['Region']:40s} {row['Lobe']:12s} composite={row['Composite_Hub']:.3f}")
+    print(f"  {row['Region']:40s} [{row['Region_Type']:11s}] {row['Lobe']:12s} composite={row['Composite_Hub']:.3f}")
 
-# === VISUALIZATION ===
+# =============================================================================
+# VISUALIZATION
+# =============================================================================
+node_colors = [lobe_colors.get(l, '#999') for l in lobes]
+
 fig, axes = plt.subplots(2, 3, figsize=(20, 12))
-fig.suptitle('Hub Centrality Measures — HCP SC Consensus Network', fontsize=15, fontweight='bold')
+fig.suptitle('Hub Centrality Measures — HCP SC Consensus Network (82 regions)\n'
+             'Circles: cortical | Diamonds: subcortical', fontsize=14, fontweight='bold')
 
 plot_measures = [
     ('Degree_Cent','Degree Centrality','How many direct connections'),
@@ -193,10 +236,26 @@ plot_measures = [
 
 for ax, (col, title, subtitle) in zip(axes.flat, plot_measures):
     vals = df[col].values
-    colors = [lobe_colors[l] for l in lobes]
     vmax = vals.max()
     sizes = 30 + 200*(vals/vmax if vmax > 0 else vals)
-    ax.scatter(range(N), vals, c=colors, s=sizes, edgecolors='white', linewidths=0.4, alpha=0.85)
+    # Cortical: circles; subcortical: diamonds
+    ctx_mask  = np.array([i < n_ctx for i in range(N)])
+    sctx_mask = ~ctx_mask
+    ax.scatter(np.where(ctx_mask)[0], vals[ctx_mask],
+               c=[node_colors[i] for i in np.where(ctx_mask)[0]],
+               s=sizes[ctx_mask], marker='o',
+               edgecolors='white', linewidths=0.4, alpha=0.85)
+    ax.scatter(np.where(sctx_mask)[0], vals[sctx_mask],
+               c=[node_colors[i] for i in np.where(sctx_mask)[0]],
+               s=sizes[sctx_mask], marker='D',
+               edgecolors='white', linewidths=0.4, alpha=0.85)
+    # Divider between cortical and subcortical
+    ax.axvline(x=n_ctx - 0.5, color='gray', linewidth=1, linestyle='--', alpha=0.5)
+    ax.text(n_ctx/2, ax.get_ylim()[1] if ax.get_ylim()[1] > 0 else vals.max(),
+            'Cortical', ha='center', fontsize=7, color='gray', va='bottom')
+    ax.text(n_ctx + n_sctx/2, vals.max(),
+            'Subcortical', ha='center', fontsize=7, color='gray', va='bottom')
+    # Label top 3
     top3 = df.nlargest(3, col).index
     for idx in top3:
         ax.annotate(labels[idx].replace('L_','L·').replace('R_','R·'),
@@ -204,11 +263,13 @@ for ax, (col, title, subtitle) in zip(axes.flat, plot_measures):
                    xytext=(0,5), textcoords='offset points',
                    bbox=dict(boxstyle='round,pad=0.15', fc='white', alpha=0.7, lw=0))
     ax.set_title(f'{title}\n({subtitle})', fontsize=10, fontweight='bold')
-    ax.set_xlabel('Region Index'); ax.set_ylabel('Centrality Score')
+    ax.set_xlabel('Region Index (0–67: cortical, 68–81: subcortical)')
+    ax.set_ylabel('Centrality Score')
     ax.grid(True, alpha=0.15)
 
 legend_patches = [mpatches.Patch(color=c, label=l) for l,c in lobe_colors.items()]
-fig.legend(handles=legend_patches, loc='lower center', ncol=6, fontsize=9, bbox_to_anchor=(0.5,-0.01))
+fig.legend(handles=legend_patches, loc='lower center', ncol=7, fontsize=9,
+           bbox_to_anchor=(0.5, -0.01))
 plt.tight_layout()
 plt.savefig('./figs/hub_centrality_analysis.png', dpi=180, bbox_inches='tight')
 
@@ -225,7 +286,8 @@ for i in range(len(centrality_cols)):
         ax2.text(j, i, f'{corr.iloc[i,j]:.2f}', ha='center', va='center', fontsize=8,
                 color='white' if abs(corr.iloc[i,j])>0.6 else 'black')
 plt.colorbar(im, ax=ax2, label='Pearson r')
-ax2.set_title('Correlation Between Centrality Measures', fontsize=12, fontweight='bold')
+ax2.set_title('Correlation Between Centrality Measures\n(82 regions: cortical + subcortical)',
+              fontsize=12, fontweight='bold')
 plt.tight_layout()
 plt.savefig('./figs/centrality_correlation.png', dpi=180, bbox_inches='tight')
 

@@ -6,6 +6,11 @@ This script loads and explores the group-consensus structural connectivity
 matrix from the Human Connectome Project (HCP) Young Adult dataset, as
 provided by the ENIGMA Toolbox.
 
+Full 82×82 matrix includes:
+  - Cortico-cortical SC        (68×68, upper-left block)
+  - Subcortico-cortical SC     (14×68, lower-left / upper-right blocks)
+  - Subcortico-subcortical SC  (14×14, lower-right block — zeros, not in load_sc())
+
 Key References:
 - Betzel et al. (2019). Distance-dependent consensus thresholds for generating
   group-representative structural brain networks. Network Neuroscience, 3(2), 475-496.
@@ -24,17 +29,31 @@ from matplotlib.colors import LogNorm
 # =============================================================================
 from enigmatoolbox.datasets import load_sc
 
-# Load cortico-cortical SC (default: Desikan-Killiany 'aparc' with 68 regions)
 sc_ctx, sc_ctx_labels, sc_sctx, sc_sctx_labels = load_sc()
 
+n_ctx  = sc_ctx.shape[0]   # 68 cortical regions
+n_sctx = sc_sctx.shape[0]  # 14 subcortical regions
+N      = n_ctx + n_sctx    # 82 total regions
+
+# Build full 82×82 SC matrix
+# [ ctx-ctx  (68×68) | ctx-sctx  (68×14) ]
+# [ sctx-ctx (14×68) | sctx-sctx (14×14) <- zeros, not available in load_sc() ]
+sc_full = np.zeros((N, N))
+sc_full[:n_ctx, :n_ctx] = sc_ctx           # cortico-cortical
+sc_full[:n_ctx, n_ctx:] = sc_sctx.T        # cortical-subcortical
+sc_full[n_ctx:, :n_ctx] = sc_sctx          # subcortical-cortical
+# sc_full[n_ctx:, n_ctx:] remains zero (subcortico-subcortical not in load_sc)
+
+labels = list(sc_ctx_labels) + list(sc_sctx_labels)
+
 print("=" * 70)
-print("HCP Young Adult — Structural Connectivity Consensus Matrix")
+print("HCP Young Adult — Structural Connectivity Consensus Matrix (82×82)")
 print("=" * 70)
 
 # --- Basic shape and metadata ---
 print(f"\n[1] CORTICO-CORTICAL SC MATRIX")
 print(f"    Shape: {sc_ctx.shape}")
-print(f"    Number of cortical regions: {sc_ctx.shape[0]}")
+print(f"    Number of cortical regions: {n_ctx}")
 print(f"    Data type: {sc_ctx.dtype}")
 print(f"    Region labels (first 10): {sc_ctx_labels[:10].tolist()}")
 
@@ -42,43 +61,71 @@ print(f"\n[2] SUBCORTICO-CORTICAL SC MATRIX")
 print(f"    Shape: {sc_sctx.shape}")
 print(f"    Subcortical labels: {sc_sctx_labels.tolist()}")
 
-# --- Value statistics ---
-print(f"\n[3] VALUE STATISTICS (cortico-cortical)")
-print(f"    Min:    {sc_ctx.min():.6f}")
-print(f"    Max:    {sc_ctx.max():.6f}")
-print(f"    Mean:   {sc_ctx.mean():.6f}")
-print(f"    Median: {np.median(sc_ctx):.6f}")
-print(f"    Std:    {sc_ctx.std():.6f}")
+print(f"\n[3] FULL SC MATRIX (82×82)")
+print(f"    Shape: {sc_full.shape}")
+print(f"    Cortical regions:    {n_ctx}")
+print(f"    Subcortical regions: {n_sctx}")
+print(f"    Total regions:       {N}")
 
-# --- Sparsity ---
-total_possible = sc_ctx.shape[0] * (sc_ctx.shape[0] - 1) / 2  # upper triangle
-nonzero_edges = np.count_nonzero(np.triu(sc_ctx, k=1))
+# --- Value statistics (per block) ---
+def block_stats(mat, name):
+    upper = mat[np.triu_indices_from(mat, k=1)]
+    nz = upper[upper > 0]
+    total_pairs = len(upper)
+    print(f"\n[4] VALUE STATISTICS — {name}")
+    if len(nz) == 0:
+        print(f"    No non-zero edges.")
+        return
+    print(f"    Min (non-zero): {nz.min():.6f}")
+    print(f"    Max:            {nz.max():.6f}")
+    print(f"    Mean (non-zero):{nz.mean():.6f}")
+    print(f"    Density:        {len(nz)/total_pairs*100:.1f}%  ({len(nz)}/{total_pairs} pairs)")
+
+block_stats(sc_full[:n_ctx, :n_ctx], "Cortico-cortical (68×68)")
+# For subcortico-cortical, the full rectangular block
+sctx_vals = sc_sctx[sc_sctx > 0]
+total_sctx_pairs = n_sctx * n_ctx
+print(f"\n[5] VALUE STATISTICS — Subcortico-cortical (14×68)")
+if len(sctx_vals) > 0:
+    print(f"    Min (non-zero): {sctx_vals.min():.6f}")
+    print(f"    Max:            {sctx_vals.max():.6f}")
+    print(f"    Mean (non-zero):{sctx_vals.mean():.6f}")
+    print(f"    Density:        {(sc_sctx > 0).sum()/total_sctx_pairs*100:.1f}%  ({(sc_sctx > 0).sum()}/{total_sctx_pairs} pairs)")
+else:
+    print(f"    No non-zero edges.")
+block_stats(sc_full[n_ctx:, n_ctx:], "Subcortico-subcortical (14×14, zeros)")
+
+# --- Sparsity for full matrix ---
+total_possible = N * (N - 1) / 2
+nonzero_edges = np.count_nonzero(np.triu(sc_full, k=1))
 density = nonzero_edges / total_possible * 100
-print(f"\n[4] NETWORK SPARSITY")
+print(f"\n[6] FULL MATRIX NETWORK SPARSITY")
 print(f"    Total possible edges (upper tri): {int(total_possible)}")
 print(f"    Non-zero edges:                   {nonzero_edges}")
 print(f"    Density:                          {density:.1f}%")
 
 # --- Symmetry check ---
-is_symmetric = np.allclose(sc_ctx, sc_ctx.T)
-print(f"\n[5] SYMMETRY CHECK")
+is_symmetric = np.allclose(sc_full, sc_full.T)
+print(f"\n[7] SYMMETRY CHECK (full 82×82)")
 print(f"    Is symmetric: {is_symmetric}")
 
-# --- Node degree (number of connections per region) ---
-binary_sc = (sc_ctx > 0).astype(int)
+# --- Node degree ---
+binary_sc = (sc_full > 0).astype(int)
 np.fill_diagonal(binary_sc, 0)
 degree = binary_sc.sum(axis=0)
-print(f"\n[6] NODE DEGREE (binary, number of connections)")
+print(f"\n[8] NODE DEGREE (binary, all 82 regions)")
 print(f"    Mean degree:   {degree.mean():.1f}")
-print(f"    Max degree:    {degree.max()} ({sc_ctx_labels[degree.argmax()]})")
-print(f"    Min degree:    {degree.min()} ({sc_ctx_labels[degree.argmin()]})")
+print(f"    Max degree:    {degree.max()} ({labels[degree.argmax()]})")
+print(f"    Min degree:    {degree.min()} ({labels[degree.argmin()]})")
+print(f"    Cortical mean:    {degree[:n_ctx].mean():.1f}")
+print(f"    Subcortical mean: {degree[n_ctx:].mean():.1f}")
 
-# --- Node strength (sum of weighted connections per region) ---
-strength = sc_ctx.sum(axis=0)
-print(f"\n[7] NODE STRENGTH (weighted, sum of connection weights)")
+# --- Node strength ---
+strength = sc_full.sum(axis=0)
+print(f"\n[9] NODE STRENGTH (weighted, all 82 regions)")
 print(f"    Mean strength: {strength.mean():.2f}")
-print(f"    Strongest hub: {sc_ctx_labels[strength.argmax()]} ({strength.max():.2f})")
-print(f"    Weakest node:  {sc_ctx_labels[strength.argmin()]} ({strength.min():.2f})")
+print(f"    Strongest hub: {labels[strength.argmax()]} ({strength.max():.2f})")
+print(f"    Weakest node:  {labels[strength.argmin()]} ({strength.min():.2f})")
 
 # =============================================================================
 # 2. Also load with different parcellations for comparison
@@ -89,87 +136,136 @@ print("=" * 70)
 parcellations = ['aparc', 'schaefer_100', 'schaefer_200', 'schaefer_300', 'schaefer_400', 'glasser_360']
 for parc in parcellations:
     try:
-        sc_tmp, labels_tmp, _, _ = load_sc(parcellation=parc)
-        print(f"  {parc:>15s}:  {sc_tmp.shape[0]:>4d} regions  |  "
-              f"density = {np.count_nonzero(np.triu(sc_tmp, k=1)) / (sc_tmp.shape[0]*(sc_tmp.shape[0]-1)/2)*100:.1f}%")
+        sc_tmp, labels_tmp, sc_sctx_tmp, _ = load_sc(parcellation=parc)
+        n_c = sc_tmp.shape[0]
+        n_s = sc_sctx_tmp.shape[0]
+        n_total = n_c + n_s
+        density_c = np.count_nonzero(np.triu(sc_tmp, k=1)) / (n_c*(n_c-1)/2)*100
+        density_s = (sc_sctx_tmp > 0).sum() / (n_s*n_c)*100
+        print(f"  {parc:>15s}:  ctx={n_c}, sctx={n_s}, total={n_total}  |  "
+              f"ctx density={density_c:.1f}%  sctx density={density_s:.1f}%")
     except Exception as e:
         print(f"  {parc:>15s}:  Error — {e}")
 
 # =============================================================================
 # 3. Visualization
 # =============================================================================
-fig, axes = plt.subplots(2, 2, figsize=(16, 14))
-fig.suptitle("HCP Young Adult — Structural Connectivity Consensus Matrix\n"
-             "(Desikan-Killiany 68-region parcellation)", fontsize=14, fontweight='bold')
+fig, axes = plt.subplots(2, 3, figsize=(20, 14))
+fig.suptitle("HCP Young Adult — Structural Connectivity Consensus Matrix (82×82)\n"
+             "(Desikan-Killiany 68 cortical + 14 subcortical regions)", fontsize=14, fontweight='bold')
 
-# --- (a) Full connectivity matrix ---
+# --- (a) Full 82×82 connectivity matrix ---
 ax = axes[0, 0]
-# Use log scale for better visibility since weights span orders of magnitude
-sc_plot = sc_ctx.copy()
+sc_plot = sc_full.copy()
 sc_plot[sc_plot == 0] = np.nan
+nz_vals = sc_plot[~np.isnan(sc_plot)]
 im = ax.imshow(sc_plot, cmap='Blues', aspect='equal',
-               norm=LogNorm(vmin=np.nanmin(sc_plot[sc_plot > 0]), vmax=np.nanmax(sc_plot)))
-ax.set_title("(a) Weighted SC Matrix (log scale)", fontsize=11)
+               norm=LogNorm(vmin=nz_vals.min(), vmax=nz_vals.max()))
+ax.set_title("(a) Full 82×82 Weighted SC Matrix (log scale)", fontsize=10)
 ax.set_xlabel("Brain Region Index")
 ax.set_ylabel("Brain Region Index")
-# Add hemisphere divider
-n_regions = sc_ctx.shape[0]
-ax.axhline(y=n_regions/2 - 0.5, color='red', linewidth=0.8, linestyle='--', alpha=0.7)
-ax.axvline(x=n_regions/2 - 0.5, color='red', linewidth=0.8, linestyle='--', alpha=0.7)
-ax.text(n_regions/4, -2, 'LH', ha='center', fontsize=9, color='red')
-ax.text(3*n_regions/4, -2, 'RH', ha='center', fontsize=9, color='red')
+# Hemisphere divider within cortex
+ax.axhline(y=n_ctx/2 - 0.5, color='red', linewidth=0.8, linestyle='--', alpha=0.7)
+ax.axvline(x=n_ctx/2 - 0.5, color='red', linewidth=0.8, linestyle='--', alpha=0.7)
+# Cortex/subcortex divider
+ax.axhline(y=n_ctx - 0.5, color='white', linewidth=1.5, linestyle='-')
+ax.axvline(x=n_ctx - 0.5, color='white', linewidth=1.5, linestyle='-')
+ax.text(n_ctx/4, -2.5, 'LH ctx', ha='center', fontsize=8, color='red')
+ax.text(3*n_ctx/4, -2.5, 'RH ctx', ha='center', fontsize=8, color='red')
+ax.text(n_ctx + n_sctx/2, -2.5, 'sctx', ha='center', fontsize=8, color='white')
 plt.colorbar(im, ax=ax, label='Connection Weight', shrink=0.8)
 
-# --- (b) Binary adjacency (thresholded) ---
+# --- (b) Binary adjacency ---
 ax = axes[0, 1]
 ax.imshow(binary_sc, cmap='Greys', aspect='equal')
-ax.set_title(f"(b) Binary Adjacency (density = {density:.1f}%)", fontsize=11)
+ax.set_title(f"(b) Binary Adjacency (density = {density:.1f}%)", fontsize=10)
 ax.set_xlabel("Brain Region Index")
 ax.set_ylabel("Brain Region Index")
-ax.axhline(y=n_regions/2 - 0.5, color='red', linewidth=0.8, linestyle='--', alpha=0.7)
-ax.axvline(x=n_regions/2 - 0.5, color='red', linewidth=0.8, linestyle='--', alpha=0.7)
+ax.axhline(y=n_ctx/2 - 0.5, color='red', linewidth=0.8, linestyle='--', alpha=0.7)
+ax.axvline(x=n_ctx/2 - 0.5, color='red', linewidth=0.8, linestyle='--', alpha=0.7)
+ax.axhline(y=n_ctx - 0.5, color='red', linewidth=1.5, linestyle='-')
+ax.axvline(x=n_ctx - 0.5, color='red', linewidth=1.5, linestyle='-')
 
-# --- (c) Edge weight distribution ---
-ax = axes[1, 0]
-upper_tri = sc_ctx[np.triu_indices_from(sc_ctx, k=1)]
-nonzero_weights = upper_tri[upper_tri > 0]
-ax.hist(nonzero_weights, bins=80, color='steelblue', edgecolor='white', linewidth=0.3)
-ax.set_title("(c) Distribution of Non-Zero Edge Weights", fontsize=11)
-ax.set_xlabel("Connection Weight (streamline count)")
+# --- (c) Edge weight distribution by block ---
+ax = axes[0, 2]
+ctx_weights = sc_ctx[np.triu_indices_from(sc_ctx, k=1)]
+ctx_nz = ctx_weights[ctx_weights > 0]
+sctx_nz = sc_sctx[sc_sctx > 0]
+ax.hist(ctx_nz, bins=60, color='steelblue', edgecolor='white', linewidth=0.3,
+        alpha=0.75, label=f'Cortico-cortical (n={len(ctx_nz)})')
+ax.hist(sctx_nz, bins=40, color='darkorange', edgecolor='white', linewidth=0.3,
+        alpha=0.75, label=f'Subcortico-cortical (n={len(sctx_nz)})')
+ax.set_title("(c) Edge Weight Distribution by Block", fontsize=10)
+ax.set_xlabel("Connection Weight")
 ax.set_ylabel("Number of Edges")
 ax.set_yscale('log')
-ax.text(0.95, 0.95, f"N edges = {len(nonzero_weights)}\nMedian = {np.median(nonzero_weights):.2f}",
-        transform=ax.transAxes, ha='right', va='top', fontsize=9,
-        bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+ax.legend(fontsize=8)
 
-# --- (d) Node strength bar chart (top 20) ---
-ax = axes[1, 1]
-sorted_idx = np.argsort(strength)[::-1][:20]
-colors = ['#2171b5' if 'L_' in sc_ctx_labels[i] or 'lh_' in sc_ctx_labels[i].lower()
-          else '#cb181d' for i in sorted_idx]
-bars = ax.barh(range(20), strength[sorted_idx], color=colors, edgecolor='white', linewidth=0.3)
-ax.set_yticks(range(20))
-ax.set_yticklabels([sc_ctx_labels[i] for i in sorted_idx], fontsize=7)
+# --- (d) Node degree: cortical vs subcortical ---
+ax = axes[1, 0]
+ctx_colors = ['#2171b5'] * n_ctx
+sctx_colors = ['#d95f02'] * n_sctx
+all_colors = ctx_colors + sctx_colors
+sorted_idx = np.argsort(degree)[::-1][:30]
+bar_colors = [all_colors[i] for i in sorted_idx]
+ax.barh(range(30), degree[sorted_idx], color=bar_colors, edgecolor='white', linewidth=0.3)
+ax.set_yticks(range(30))
+ax.set_yticklabels([labels[i] for i in sorted_idx], fontsize=6)
 ax.invert_yaxis()
-ax.set_title("(d) Top 20 Regions by Node Strength", fontsize=11)
+ax.set_title("(d) Top 30 Regions by Degree\n(blue=cortical, orange=subcortical)", fontsize=10)
+ax.set_xlabel("Degree (# connections)")
+
+# --- (e) Node strength bar chart (top 30) ---
+ax = axes[1, 1]
+sorted_str = np.argsort(strength)[::-1][:30]
+str_colors = [all_colors[i] for i in sorted_str]
+ax.barh(range(30), strength[sorted_str], color=str_colors, edgecolor='white', linewidth=0.3)
+ax.set_yticks(range(30))
+ax.set_yticklabels([labels[i] for i in sorted_str], fontsize=6)
+ax.invert_yaxis()
+ax.set_title("(e) Top 30 Regions by Node Strength\n(blue=cortical, orange=subcortical)", fontsize=10)
 ax.set_xlabel("Total Connection Strength")
+
+# --- (f) Subcortico-cortical connectivity snapshot ---
+ax = axes[1, 2]
+im2 = ax.imshow(sc_sctx, cmap='YlOrRd', aspect='auto')
+ax.set_yticks(range(n_sctx))
+ax.set_yticklabels(sc_sctx_labels, fontsize=7)
+ax.set_xlabel("Cortical Region Index (Desikan-Killiany)")
+ax.set_title("(f) Subcortico-Cortical SC Block (14×68)", fontsize=10)
+plt.colorbar(im2, ax=ax, label='Connection Weight', shrink=0.8)
 
 plt.tight_layout()
 plt.savefig('./figs/hcp_sc_overview.png', dpi=180, bbox_inches='tight')
 print(f"\n✓ Figure saved to hcp_sc_overview.png")
 
 # =============================================================================
-# 4. Subcortico-cortical connectivity snapshot
+# 4. Per-block summary figure
 # =============================================================================
-fig2, ax2 = plt.subplots(figsize=(14, 4))
-im2 = ax2.imshow(sc_sctx, cmap='YlOrRd', aspect='auto')
-ax2.set_yticks(range(len(sc_sctx_labels)))
-ax2.set_yticklabels(sc_sctx_labels, fontsize=7)
-ax2.set_xlabel("Cortical Region Index (Desikan-Killiany)")
-ax2.set_title("Subcortico-Cortical Structural Connectivity", fontsize=12, fontweight='bold')
-plt.colorbar(im2, ax=ax2, label='Connection Weight', shrink=0.8)
-plt.tight_layout()
-plt.savefig('./figs/hcp_sc_subcortical.png', dpi=180, bbox_inches='tight')
-print(f"✓ Subcortical figure saved to hcp_sc_subcortical.png")
+fig2, axes2 = plt.subplots(1, 3, figsize=(18, 5))
+fig2.suptitle("HCP SC — Block Structure of Full 82×82 Matrix", fontsize=13, fontweight='bold')
 
-print(f"\nDone! All labels:\n{sc_ctx_labels.tolist()}")
+block_labels = ['Cortico-cortical\n(68×68)', 'Subcortico-cortical\n(14×68)', 'Subcortico-subcortical\n(14×14, zeros)']
+block_mats   = [sc_full[:n_ctx, :n_ctx], sc_sctx, sc_full[n_ctx:, n_ctx:]]
+block_cmaps  = ['Blues', 'YlOrRd', 'Greys']
+
+for ax, mat, title, cmap in zip(axes2, block_mats, block_labels, block_cmaps):
+    nz = mat[mat > 0]
+    if len(nz) > 0:
+        disp = mat.copy(); disp[disp == 0] = np.nan
+        im3 = ax.imshow(disp, cmap=cmap, aspect='auto',
+                        norm=LogNorm(vmin=nz.min(), vmax=nz.max()))
+        plt.colorbar(im3, ax=ax, label='Weight', shrink=0.8)
+    else:
+        ax.imshow(mat, cmap=cmap, aspect='auto')
+        ax.text(0.5, 0.5, 'No data\n(zeros)', transform=ax.transAxes,
+                ha='center', va='center', fontsize=12, color='gray')
+    ax.set_title(title, fontsize=11, fontweight='bold')
+
+plt.tight_layout()
+plt.savefig('./figs/hcp_sc_blocks.png', dpi=180, bbox_inches='tight')
+print(f"✓ Block structure figure saved to hcp_sc_blocks.png")
+
+print(f"\nDone! Labels ({N} total):")
+print(f"  Cortical ({n_ctx}):    {sc_ctx_labels.tolist()}")
+print(f"  Subcortical ({n_sctx}): {sc_sctx_labels.tolist()}")
