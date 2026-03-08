@@ -20,11 +20,9 @@ fsaverage = datasets.fetch_surf_fsaverage('fsaverage5')
 
 # ── Render 4 views to temp PNGs via nilearn ──────────────────────────────────
 def render_views(lh, rh, cmap, vmin, vmax, prefix):
-    """Save lat-L / med-L / med-R / lat-R PNGs; return their paths."""
+    """Save lateral-L and lateral-R PNGs; return their paths."""
     config = [
         ('pial_left',  'sulc_left',  lh, 'left',  'lateral'),
-        ('pial_left',  'sulc_left',  lh, 'left',  'medial'),
-        ('pial_right', 'sulc_right', rh, 'right', 'medial'),
         ('pial_right', 'sulc_right', rh, 'right', 'lateral'),
     ]
     paths = []
@@ -106,60 +104,93 @@ row_configs = [
      'Left hippocampus (Lhippo)', 'subcortical'),
 ]
 
-fig = plt.figure(figsize=(20, 18), facecolor='white')
+fig = plt.figure(figsize=(22, 12), facecolor='white')
 
-# 4 brain rows + 1 col for colorbar; extra vertical space between the two seed pairs
-gs = GridSpec(4, 5, figure=fig,
-              width_ratios=[4, 4, 4, 4, 0.35],
-              height_ratios=[1, 1, 1, 1],
-              hspace=0.22, wspace=0.04,
-              left=0.01, right=0.98, top=0.96, bottom=0.02)
+# 2 rows (cortical / subcortical seed) × (FC left | FC right | SC left | SC right | colorbar pair)
+# Laid out as: [FC-LH | FC-RH | gap | SC-LH | SC-RH | cb-FC | cb-SC]
+gs = GridSpec(2, 7, figure=fig,
+              width_ratios=[5, 5, 0.3, 5, 5, 0.35, 0.35],
+              height_ratios=[1, 1],
+              hspace=0.30, wspace=0.05,
+              left=0.02, right=0.98, top=0.93, bottom=0.04)
 
-for row, paths, cmap, vmin, vmax, title, seed_name, seed_type in row_configs:
-    imgs = [mpimg.imread(p) for p in paths]
+# Row 0 = cortical seed (L_middletemporal), Row 1 = subcortical seed (Lhippo)
+# Within each row: FC-LH | FC-RH | [gap] | SC-LH | SC-RH | cb-FC | cb-SC
+seed_rows = [
+    (0, paths_fc1, paths_sc1, 0.2, 0.7, 2, 10,
+     'L_middletemporal', 'cortical',
+     'Functional Cortico-Cortical Connectivity',
+     'Structural Cortico-Cortical Connectivity'),
+    (1, paths_fc2, paths_sc2, 0.1, 0.3, 1, 10,
+     'Left Hippocampus (Lhippo)', 'subcortical',
+     'Functional Subcortico-Cortical Connectivity',
+     'Structural Subcortico-Cortical Connectivity'),
+]
 
-    for col, img in enumerate(imgs):
+for row, p_fc, p_sc, fc_min, fc_max, sc_min, sc_max, seed_name, seed_type, fc_title, sc_title in seed_rows:
+    imgs_fc = [mpimg.imread(p) for p in p_fc]   # [LH, RH]
+    imgs_sc = [mpimg.imread(p) for p in p_sc]   # [LH, RH]
+
+    # columns: 0=FC-LH, 1=FC-RH, 2=gap, 3=SC-LH, 4=SC-RH, 5=cb-FC, 6=cb-SC
+    panels = [
+        (0, imgs_fc[0], 'Left Hemisphere',  fc_title, True),
+        (1, imgs_fc[1], 'Right Hemisphere', '',        False),
+        (3, imgs_sc[0], 'Left Hemisphere',  sc_title,  True),
+        (4, imgs_sc[1], 'Right Hemisphere', '',        False),
+    ]
+
+    for col, img, hemi_label, subtitle, show_seed in panels:
         ax = fig.add_subplot(gs[row, col])
         ax.imshow(img)
         ax.axis('off')
 
-        # Row title + seed label (left of the lateral-L view)
-        if col == 0:
+        ax.text(0.5, -0.03, hemi_label, transform=ax.transAxes,
+                ha='center', va='top', fontsize=9, color='#555', style='italic')
+
+        if subtitle:
             ax.set_title(
-                f'{title}\n'
-                f'$\\it{{Seed:}}$ {seed_name}',
-                fontsize=11, fontweight='bold',
-                loc='left', pad=5, color='#111',
+                f'{subtitle}\n' + r'$\it{Seed}$' + f': {seed_name}',
+                fontsize=10, fontweight='bold', loc='left', pad=5, color='#111',
             )
 
-        # "seed" circle + arrow on the left-lateral view
-        if col == 0:
+        if show_seed:
             h, w = img.shape[:2]
-            # cortical seed: mid-temporal region (~30% from left, 58% from top)
-            # subcortical seed: hippocampus sits slightly lower / more medial
-            if seed_type == 'cortical':
-                sx, sy = int(w * 0.30), int(h * 0.58)
-            else:
-                sx, sy = int(w * 0.38), int(h * 0.63)
-            ax.plot(sx, sy, 'o', mfc='none', mec='black', ms=7, mew=1.5, zorder=5)
+            sx = int(w * 0.30) if seed_type == 'cortical' else int(w * 0.38)
+            sy = int(h * 0.58) if seed_type == 'cortical' else int(h * 0.63)
+            ax.plot(sx, sy, 'o', mfc='none', mec='black', ms=8, mew=1.5, zorder=5)
             ax.annotate('seed', xy=(sx, sy),
-                        xytext=(sx - int(w * 0.12), sy + int(h * 0.14)),
+                        xytext=(sx - int(w * 0.13), sy + int(h * 0.15)),
                         fontsize=9, color='black',
                         arrowprops=dict(arrowstyle='-', color='black', lw=1.0))
 
-    # Colorbar
-    ax_cb = fig.add_subplot(gs[row, 4])
-    sm = mplcm.ScalarMappable(cmap=cmap, norm=Normalize(vmin=vmin, vmax=vmax))
-    sm.set_array([])
-    cb = plt.colorbar(sm, cax=ax_cb)
-    cb.ax.tick_params(labelsize=9)
-    cb.set_ticks([vmin, vmax])
+    # FC colorbar
+    ax_cb_fc = fig.add_subplot(gs[row, 5])
+    sm_fc = mplcm.ScalarMappable(cmap='Reds', norm=Normalize(vmin=fc_min, vmax=fc_max))
+    sm_fc.set_array([])
+    cb_fc = plt.colorbar(sm_fc, cax=ax_cb_fc)
+    cb_fc.set_ticks([fc_min, fc_max])
+    cb_fc.ax.tick_params(labelsize=8)
 
-# Horizontal divider between the two seed pairs (between rows 1 and 2)
+    # SC colorbar
+    ax_cb_sc = fig.add_subplot(gs[row, 6])
+    sm_sc = mplcm.ScalarMappable(cmap='Blues', norm=Normalize(vmin=sc_min, vmax=sc_max))
+    sm_sc.set_array([])
+    cb_sc = plt.colorbar(sm_sc, cax=ax_cb_sc)
+    cb_sc.set_ticks([sc_min, sc_max])
+    cb_sc.ax.tick_params(labelsize=8)
+
+# Vertical divider between FC and SC panels
 fig.add_artist(plt.Line2D(
-    [0.01, 0.97], [0.502, 0.502],       # figure-fraction coordinates
+    [0.485, 0.485], [0.04, 0.96],
     transform=fig.transFigure,
-    color='#aaa', linewidth=1.2, linestyle='--'
+    color='#bbb', linewidth=1.2, linestyle='--'
+))
+
+# Horizontal divider between cortical and subcortical seed rows
+fig.add_artist(plt.Line2D(
+    [0.02, 0.98], [0.50, 0.50],
+    transform=fig.transFigure,
+    color='#bbb', linewidth=1.2, linestyle='--'
 ))
 
 plt.savefig('./figs/enigma_seed_surface.png', dpi=180,
