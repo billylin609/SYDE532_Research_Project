@@ -1,0 +1,14 @@
+,Value
+Global Degree Centrality,0.3354411321890997
+Global Betweenness Centrality,0.009722222222222222
+Global Closeness Centrality,4.573226390655494
+Global Eigenvector Centrality,0.10306295507230086
+Global PageRank Centrality,0.012195121951219514
+Density,0.33544113218909966
+Global Efficiency,0.6646592391849846
+Avg Clustering Coeff,0.3207743824977473
+Transitivity,0.4970964344817211
+Avg Path Length (wt),0.2219413059389302
+Spectral Radius (λ_max),222.05727017219613
+Spectral Gap,99.44235800946615
+Algebraic Connectivity,37.43224853344899

@@ -7,6 +7,7 @@ from matplotlib.colors import Normalize
 from matplotlib.gridspec import GridSpec
 import matplotlib.cm as mplcm
 import numpy as np
+import networkx as nx
 import os
 
 os.makedirs('./figs', exist_ok=True)
@@ -196,3 +197,122 @@ fig.add_artist(plt.Line2D(
 plt.savefig('./figs/enigma_seed_surface.png', dpi=180,
             bbox_inches='tight', facecolor='white')
 print("\n✓ Saved: ./figs/enigma_seed_surface.png")
+
+# =============================================================================
+# GLOBAL CENTRALITY METRICS
+# =============================================================================
+print("\nComputing global centrality metrics...")
+
+# Build full 82×82 SC matrix
+n_ctx  = sc_ctx.shape[0]
+n_sctx = sc_sctx.shape[0]
+N      = n_ctx + n_sctx
+sc_full = np.zeros((N, N))
+sc_full[:n_ctx, :n_ctx] = sc_ctx
+sc_full[:n_ctx, n_ctx:] = sc_sctx.T
+sc_full[n_ctx:, :n_ctx] = sc_sctx
+
+# Build full FC matrix (ctx + sctx rows to ctx columns)
+fc_full_rows = np.vstack([fc_ctx, fc_sctx])   # (82, 68) — FC to cortex only
+
+# Build NetworkX graphs
+def build_graph(mat):
+    G = nx.Graph()
+    n = mat.shape[0]
+    for i in range(n):
+        for j in range(i+1, n):
+            if mat[i, j] > 0:
+                G.add_edge(i, j, weight=float(mat[i, j]))
+    return G
+
+G_sc = build_graph(sc_full)
+G_fc = build_graph(fc_ctx)     # FC graph: cortical only (68×68)
+
+def compute_global_metrics(G, mat, label):
+    inv_w = {(u,v): 1.0/d['weight'] for u,v,d in G.edges(data=True)}
+    nx.set_edge_attributes(G, {k: {'inv_weight': v} for k,v in inv_w.items()})
+
+    n = G.number_of_nodes()
+    A = mat[:n, :n] if mat.shape[0] >= n else mat
+    # Use only the submatrix matching graph size
+    A = np.zeros((n, n))
+    for u, v, d in G.edges(data=True):
+        A[u, v] = A[v, u] = d['weight']
+
+    eigvals_A = np.linalg.eigvalsh(A)
+    L = nx.laplacian_matrix(G).toarray().astype(float)
+    eigvals_L = np.linalg.eigvalsh(L)
+
+    metrics = {
+        'Density':                  nx.density(G),
+        'Global Efficiency':        nx.global_efficiency(G),
+        'Avg Clustering Coeff':     nx.average_clustering(G, weight='weight'),
+        'Transitivity':             nx.transitivity(G),
+        'Avg Path Length':          nx.average_shortest_path_length(G, weight='inv_weight')
+                                    if nx.is_connected(G) else float('nan'),
+        'Spectral Radius (λ_max)':  float(eigvals_A.max()),
+        'Spectral Gap':             float(eigvals_A[-1] - eigvals_A[-2]),
+        'Algebraic Connectivity':   float(eigvals_L[1]),
+    }
+    print(f"\n  [{label}]")
+    for k, v in metrics.items():
+        print(f"    {k:<30s}: {v:.4f}")
+    return metrics
+
+metrics_sc = compute_global_metrics(G_sc, sc_full, "SC — full 82×82")
+metrics_fc = compute_global_metrics(G_fc, fc_ctx,  "FC — cortical 68×68")
+
+# =============================================================================
+# FIGURE: Global Metrics — SC vs FC side-by-side
+# =============================================================================
+metric_keys = [
+    'Density', 'Global Efficiency', 'Avg Clustering Coeff', 'Transitivity',
+    'Spectral Radius (λ_max)', 'Spectral Gap', 'Algebraic Connectivity', 'Avg Path Length',
+]
+
+group_colors = {
+    'Density':                   '#457b9d',
+    'Global Efficiency':         '#2a9d8f',
+    'Avg Clustering Coeff':      '#e9c46a',
+    'Transitivity':              '#f4a261',
+    'Spectral Radius (λ_max)':   '#e63946',
+    'Spectral Gap':              '#8338ec',
+    'Algebraic Connectivity':    '#6c757d',
+    'Avg Path Length':           '#1d3557',
+}
+
+fig_gm, axes_gm = plt.subplots(1, 2, figsize=(16, 6))
+fig_gm.suptitle('Global Centrality Metrics — HCP Structural & Functional Connectivity',
+                fontsize=13, fontweight='bold')
+
+for ax, metrics, graph_label, mat_label in [
+    (axes_gm[0], metrics_sc, 'SC  (full 82×82 matrix)', 'SC'),
+    (axes_gm[1], metrics_fc, 'FC  (cortical 68×68 matrix)', 'FC'),
+]:
+    vals  = [metrics[k] for k in metric_keys]
+    clrs  = [group_colors[k] for k in metric_keys]
+    short = ['Density', 'Global\nEfficiency', 'Avg\nClustering', 'Transitivity',
+             'Spectral\nRadius', 'Spectral\nGap', 'Algebraic\nConnectivity', 'Avg Path\nLength']
+
+    bars = ax.bar(range(len(metric_keys)), vals, color=clrs,
+                  edgecolor='white', linewidth=0.5, alpha=0.88)
+    for bar, v in zip(bars, vals):
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + max(vals)*0.01,
+                f'{v:.3f}', ha='center', va='bottom', fontsize=8, fontweight='bold')
+
+    ax.set_xticks(range(len(metric_keys)))
+    ax.set_xticklabels(short, fontsize=8)
+    ax.set_ylabel('Value', fontsize=10)
+    ax.set_title(graph_label, fontsize=11, fontweight='bold')
+    ax.grid(True, alpha=0.12, axis='y')
+    ax.set_ylim(0, max(vals) * 1.18)
+
+    # Group annotation bands
+    ax.axvspan(-0.5, 3.5, alpha=0.04, color='green',  label='Topological')
+    ax.axvspan(3.5,  7.5, alpha=0.04, color='purple', label='Spectral / Path')
+    ax.legend(fontsize=8, loc='upper right')
+
+plt.tight_layout()
+plt.savefig('./figs/enigma_global_metrics.png', dpi=180,
+            bbox_inches='tight', facecolor='white')
+print("\n✓ Saved: ./figs/enigma_global_metrics.png")
