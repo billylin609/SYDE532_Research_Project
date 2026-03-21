@@ -3,7 +3,7 @@
 Required Dependencies:
 
 ```
-pip install numpy matplotlib scipy nibabel pandas scikit-learn networkx infomap nilearn
+pip install numpy matplotlib scipy nibabel pandas scikit-learn networkx infomap nilearn leidenalg python-igraph
 
 git submodule update --init --recursive
 cd ENIGMA
