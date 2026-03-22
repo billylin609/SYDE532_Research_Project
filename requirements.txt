@@ -1,0 +1,32 @@
+# Core scientific stack
+numpy
+pandas
+scipy
+matplotlib
+
+# Neuroimaging
+nibabel
+nilearn
+vtk==9.2.2  # lowest version available for Python 3.10; ENIGMA needs patching for 9.1+
+
+# Graph/network analysis
+networkx
+infomap
+leidenalg
+python-igraph
+
+# Machine learning
+scikit-learn
+
+# Jupyter
+jupyter
+ipykernel
+
+# VTK inline rendering in Jupyter (WSL-compatible)
+itkwidgets
+trame
+trame-vtk
+
+# ENIGMA Toolbox – install from submodule:
+#   git submodule update --init --recursive
+#   cd ENIGMA && python setup.py install
