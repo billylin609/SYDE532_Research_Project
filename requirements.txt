@@ -21,6 +21,7 @@ scikit-learn
 # Jupyter
 jupyter
 ipykernel
+tqdm
 
 # VTK inline rendering in Jupyter (WSL-compatible)
 itkwidgets
