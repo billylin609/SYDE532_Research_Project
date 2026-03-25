@@ -14,20 +14,23 @@ networkx
 infomap
 leidenalg
 python-igraph
+ndlib                 # Network Diffusion Library — cascade/threshold models
 
 # Machine learning
 scikit-learn
 
-# Jupyter
+# Jupyter / tooling
 jupyter
 ipykernel
 tqdm
-Pillow
+Pillow                # required for matplotlib GIF output (PillowWriter)
+jupytext              # convert .ipynb ↔ .py
 
-# VTK inline rendering in Jupyter (WSL-compatible)
-itkwidgets
-trame
-trame-vtk
+# VTK offline rendering (WSL/headless via OSMesa)
+# itkwidgets and trame are optional — only needed for interactive Jupyter VTK widgets
+# itkwidgets
+# trame
+# trame-vtk
 
 # ENIGMA Toolbox – install from submodule:
 #   git submodule update --init --recursive
