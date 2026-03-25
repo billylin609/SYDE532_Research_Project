@@ -70,6 +70,30 @@ def assign_known_network(region_short):
     return best_net if best_score > 0 else 'Unassigned'
 
 
+def load_full_sc():
+    """Load full 82x82 SC (68 cortical + 14 subcortical) and assign network labels."""
+    sc_ctx, sc_ctx_labels, sc_sctx, sc_sctx_labels = load_sc()
+    n_ctx  = sc_ctx.shape[0]   # 68
+    n_sctx = sc_sctx.shape[0]  # 14
+    n      = n_ctx + n_sctx    # 82
+
+    # Build symmetric 82x82 matrix
+    A_full = np.zeros((n, n))
+    A_full[:n_ctx, :n_ctx] = sc_ctx           # cortical-cortical
+    A_full[n_ctx:, :n_ctx] = sc_sctx          # subcortical-cortical
+    A_full[:n_ctx, n_ctx:] = sc_sctx.T        # cortical-subcortical
+
+    all_labels = np.concatenate([sc_ctx_labels, sc_sctx_labels])
+    A_bin = (A_full > 0).astype(float)
+    G_w   = nx.from_numpy_array(A_full)
+    G_uw  = nx.from_numpy_array(A_bin)
+
+    short_labels    = [l.replace('L_', '').replace('R_', '').lower() for l in all_labels]
+    known_networks  = [assign_known_network(s) for s in short_labels]
+
+    return A_full, all_labels, n, A_bin, G_w, G_uw, short_labels, known_networks
+
+
 def load_sc_with_networks():
     """Load HCP SC and assign functional network labels."""
     sc_ctx, sc_ctx_labels, sc_sctx, sc_sctx_labels = load_sc()

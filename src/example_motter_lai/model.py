@@ -8,19 +8,20 @@ import ndlib.models.epidemics as ep
 
 np.random.seed(42)
 
-# ── Network: 12-node hub-bridge-leaf structure ────────────────────────────────
+# ── Network: 12-node hub-provincial-nonhub-leaf structure ─────────────────────
 EDGES = [
     (0,1),(0,2),(0,3),(0,4),(0,5),  # node 0: central hub
-    (1,6),(1,7),                     # node 1: sub-hub A
-    (2,7),(2,8),                     # node 2: sub-hub B
-    (3,9),                           # node 3: bridge
-    (4,9),(4,10),                    # node 4: bridge
-    (5,10),(5,11),                   # node 5: bridge
+    (1,6),(1,7),                     # node 1: provincial hub A
+    (2,7),(2,8),                     # node 2: provincial hub B
+    (3,9),                           # node 3: non-hub connector
+    (4,9),(4,10),                    # node 4: non-hub connector
+    (5,10),(5,11),                   # node 5: non-hub connector
     (6,7),(8,9),(10,11),             # leaf cross-links
 ]
 ROLES = {
-    0:'Hub', 1:'Sub-Hub A', 2:'Sub-Hub B',
-    3:'Bridge', 4:'Bridge', 5:'Bridge',
+    0:'Hub',
+    1:'Provincial Hub A', 2:'Provincial Hub B',
+    3:'Non-Hub Connector', 4:'Non-Hub Connector', 5:'Non-Hub Connector',
     6:'Leaf', 7:'Leaf', 8:'Leaf', 9:'Leaf', 10:'Leaf', 11:'Leaf'
 }
 POS = {
@@ -34,10 +35,11 @@ POS = {
 N = 12
 
 ROLE_COLORS = {
-    'Hub':      '#ff6600',
-    'Sub-Hub A':'#f39c12', 'Sub-Hub B':'#f39c12',
-    'Bridge':   '#27ae60',
-    'Leaf':     '#3498db',
+    'Hub':               '#ff6600',
+    'Provincial Hub A':  '#f39c12',
+    'Provincial Hub B':  '#f39c12',
+    'Non-Hub Connector': '#27ae60',
+    'Leaf':              '#3498db',
 }
 
 ALPHA = 0.3   # tolerance: C_j = (1+alpha) * L_j(0)

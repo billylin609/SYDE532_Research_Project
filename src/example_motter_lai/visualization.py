@@ -113,7 +113,7 @@ node_x = np.array([POS[n][0] for n in range(N)])
 node_y = np.array([POS[n][1] for n in range(N)])
 node_sz = np.array([400 if ROLES[n] == 'Hub'
                     else 280 if 'Sub' in ROLES[n]
-                    else 220 if 'Bridge' in ROLES[n]
+                    else 220 if 'Non-Hub' in ROLES[n]
                     else 160 for n in range(N)])
 
 scat = ax_net.scatter(node_x, node_y, s=node_sz,
