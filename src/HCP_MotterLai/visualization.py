@@ -19,8 +19,9 @@ import numpy as np
 import networkx as nx
 
 import yaml
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
-from HCP_MotterLai.model import load_sc_and_loads, motter_lai
+from HCP_MotterLai.model import load_sc_and_loads, motter_lai, precompute_L0
 from HCP_Community.model import detect_leiden, load_full_sc
 
 _DIR     = os.path.dirname(os.path.abspath(__file__))
@@ -39,6 +40,12 @@ PANEL = '#0f1520'
 print('Loading HCP SC…')
 (sc_ctx, sc_ctx_labels, N, A_bin, G_w, G_uw,
  L0_uw_arr, L0_w_arr, degree_arr) = load_sc_and_loads()
+
+# Precompute L0 once — reused by every motter_lai call to avoid
+# redundant full-graph betweenness computation (saves ~320 calls during sweep)
+print('Precomputing initial loads…')
+_L0_precomputed   = precompute_L0(sc_ctx, weighted=False)
+_L0_precomputed_w = precompute_L0(sc_ctx, weighted=True)
 
 def resolve_node(label):
     """Return node index for a label string or 'argmax_betweenness'."""
@@ -146,13 +153,13 @@ def refresh_edges(col, failed_set):
 
 
 # ── Shared scatter helpers ─────────────────────────────────────────────────────
-FPS        = 24
-HOLD_SEC   = 2
-TRANS_SEC  = 1
-FREEZE_SEC = 2
-HOLD   = FPS * HOLD_SEC
-TRANS  = FPS * TRANS_SEC
-FREEZE = FPS * FREEZE_SEC
+FPS        = 15          # reduced from 24 — fewer frames, same visual duration
+HOLD_SEC   = 1.0         # reduced from 2
+TRANS_SEC  = 0.5         # reduced from 1
+FREEZE_SEC = 1.5         # reduced from 2
+HOLD   = max(1, int(FPS * HOLD_SEC))
+TRANS  = max(1, int(FPS * TRANS_SEC))
+FREEZE = max(1, int(FPS * FREEZE_SEC))
 
 
 def update_scatter(scat, glow, failed_now, pulsing=frozenset(), forced=frozenset(), sub_f=0):
@@ -220,14 +227,35 @@ def crit_alpha(dmg, alphas):
     return alphas[-1]
 
 
+# ── Parallel alpha sweep ───────────────────────────────────────────────────────
+# Worker must be a module-level picklable function for ProcessPoolExecutor.
+def _sweep_worker(args):
+    """Run motter_lai for one (node_idx, alpha) pair. Top-level for pickling."""
+    idx, alpha, A, L0_arr = args
+    return motter_lai(A, idx, alpha, L0_arr=L0_arr)[0]
+
+
 sweep_results = {}
-for lbl in sw_nodes:
-    idx = resolve_node(lbl)
-    print(f'Sweeping α for {lbl}…')
-    G_vals = [motter_lai(sc_ctx, idx, a)[0] for a in ALPHAS]
-    sweep_results[lbl] = (idx, G_vals)
+node_index_map = {lbl: resolve_node(lbl) for lbl in sw_nodes}
+tasks = [(lbl, idx, a) for lbl in sw_nodes for a in ALPHAS
+         for idx in [node_index_map[lbl]]]
+
+print(f'Sweeping {len(sw_nodes)} nodes × {len(ALPHAS)} alphas in parallel…')
+worker_args = [(node_index_map[lbl], a, sc_ctx, _L0_precomputed)
+               for lbl in sw_nodes for a in ALPHAS]
+
+with ProcessPoolExecutor() as pool:
+    all_G = list(pool.map(_sweep_worker, worker_args, chunksize=4))
+
+# Reshape results back to per-node
+n_alpha = len(ALPHAS)
+for i, lbl in enumerate(sw_nodes):
+    idx = node_index_map[lbl]
+    sweep_results[lbl] = (idx, all_G[i * n_alpha:(i + 1) * n_alpha])
+    print(f'  Done: {lbl}')
 
     # ── Per-node individual sweep plot ────────────────────────────────────────
+    _, G_vals = sweep_results[lbl]
     dmg   = 1 - np.array(G_vals)
     crit  = crit_alpha(dmg, ALPHAS)
     color = SWEEP_COLORS[sw_nodes.index(lbl) % len(SWEEP_COLORS)]
@@ -249,7 +277,8 @@ for lbl in sw_nodes:
     ax.axhline(0.0, color='black', lw=0.8, ls='--', alpha=0.4)
     ax.set_xlabel('Tolerance parameter  α', fontsize=11)
     ax.set_ylabel('Cascade damage  =  1 − G', fontsize=11)
-    ax.set_title(f'Cascade Damage vs Tolerance — {lbl}', fontsize=12, fontweight='bold')
+    ax.set_title(f'Cascade Damage vs Tolerance — {lbl}  [Unweighted]',
+                 fontsize=12, fontweight='bold')
     ax.legend(fontsize=9)
     ax.set_xlim(sw_cfg['alpha_min'], sw_cfg['alpha_max'])
     ax.set_ylim(-0.02, 1.02)
@@ -260,23 +289,60 @@ for lbl in sw_nodes:
     plt.close(fig)
     print(f'Saved: {out}')
 
-# ── Combined comparison sweep plot (all nodes) ─────────────────────────────
-fig, ax = plt.subplots(figsize=(11, 5))
+# ══════════════════════════════════════════════════════════════════════════════
+# WEIGHTED vs UNWEIGHTED CASCADE COMPARISON
+# ══════════════════════════════════════════════════════════════════════════════
+print('\n=== WEIGHTED vs UNWEIGHTED SWEEP ===')
+print('Running weighted sweep (uses inverse-weight distances for betweenness)…')
+
+def _sweep_worker_w(args):
+    idx, alpha, A, L0_arr = args
+    return motter_lai(A, idx, alpha, weighted=True, L0_arr=L0_arr)[0]
+
+worker_args_w = [(node_index_map[lbl], a, sc_ctx, _L0_precomputed_w)
+                 for lbl in sw_nodes for a in ALPHAS]
+with ProcessPoolExecutor() as pool:
+    all_G_w = list(pool.map(_sweep_worker_w, worker_args_w, chunksize=4))
+
+sweep_results_w = {}
 for i, lbl in enumerate(sw_nodes):
-    idx, G_vals = sweep_results[lbl]
-    dmg   = 1 - np.array(G_vals)
+    idx = node_index_map[lbl]
+    sweep_results_w[lbl] = (idx, all_G_w[i * n_alpha:(i + 1) * n_alpha])
+
+# ── Overlay plot: UW (transparent) + W (solid) on the same axes ──────────────
+fig, ax = plt.subplots(figsize=(12, 5))
+for i, lbl in enumerate(sw_nodes):
     color = SWEEP_COLORS[i % len(SWEEP_COLORS)]
     mark  = SWEEP_MARKERS[i % len(SWEEP_MARKERS)]
-    crit  = crit_alpha(dmg, ALPHAS)
-    ax.plot(ALPHAS, dmg, f'{mark}-', color=color, linewidth=1.8, markersize=3,
-            label=f'{lbl}  (crit α≈{crit:.2f})')
-    ax.axvline(crit, color=color, lw=1.0, ls=':', alpha=0.6)
+
+    _, G_uw = sweep_results[lbl]
+    dmg_uw  = 1 - np.array(G_uw)
+    _, G_w  = sweep_results_w[lbl]
+    dmg_w   = 1 - np.array(G_w)
+
+    # Unweighted — dashed, full opacity
+    ax.plot(ALPHAS, dmg_uw, f'{mark}--', color=color, linewidth=1.4,
+            markersize=2.5, alpha=1.0)
+    # Weighted — solid, full opacity, carries the legend entry
+    crit_w = crit_alpha(dmg_w, ALPHAS)
+    ax.plot(ALPHAS, dmg_w, f'{mark}-', color=color, linewidth=2.0,
+            markersize=3, alpha=1.0,
+            label=f'{lbl}  W crit α≈{crit_w:.2f}')
+    ax.axvline(crit_w, color=color, lw=0.8, ls=':', alpha=0.5)
+
+# Invisible proxy lines for the UW / W legend entries
+from matplotlib.lines import Line2D
+ax.add_line(Line2D([], [], color='grey', lw=1.5, ls='--',
+                   label='── Unweighted (dashed)'))
+ax.add_line(Line2D([], [], color='grey', lw=1.5, ls='-',
+                   label='── Weighted (solid)'))
 
 ax.axhline(0.0, color='black', lw=0.8, ls='--', alpha=0.4)
 ax.set_xlabel('Tolerance parameter  α', fontsize=12)
 ax.set_ylabel('Cascade damage  =  1 − G', fontsize=12)
-ax.set_title('Cascade Damage vs Tolerance — All Nodes', fontsize=13, fontweight='bold')
-ax.legend(fontsize=8, ncol=2)
+ax.set_title('Cascade Damage vs Tolerance — Weighted vs Unweighted  (all nodes)',
+             fontsize=13, fontweight='bold')
+ax.legend(fontsize=7.5, ncol=2, framealpha=0.85)
 ax.set_xlim(sw_cfg['alpha_min'], sw_cfg['alpha_max'])
 ax.set_ylim(-0.02, 1.02)
 ax.grid(True, alpha=0.3)
@@ -286,6 +352,47 @@ plt.savefig(out, dpi=150, bbox_inches='tight')
 plt.close(fig)
 print(f'Saved: {out}')
 
+# ── Comparison table ──────────────────────────────────────────────────────────
+# Report damage (1-G) at 3 representative alpha values
+report_alphas = [0.1, 0.25, 0.4, 0.6, 1.0]
+ra_idx = [int(np.argmin(np.abs(ALPHAS - a))) for a in report_alphas]
+
+print()
+print('=' * 105)
+print('CASCADE DAMAGE (1 - G)  —  Unweighted (UW) vs Weighted (W) betweenness')
+print('=' * 105)
+header = f'  {"Node":<28}' + ''.join(
+    f'  α={a:.2f} UW    W   Δ' for a in report_alphas)
+print(header)
+print('  ' + '-' * 103)
+
+for lbl in sw_nodes:
+    _, G_uw_vals = sweep_results[lbl]
+    _, G_w_vals  = sweep_results_w[lbl]
+    dmg_uw = 1 - np.array(G_uw_vals)
+    dmg_w  = 1 - np.array(G_w_vals)
+    row = f'  {lbl:<28}'
+    for ai in ra_idx:
+        du = dmg_uw[ai]; dw = dmg_w[ai]
+        row += f'  {du:5.3f} {dw:5.3f} {dw-du:+.3f}'
+    print(row)
+
+print()
+print('  Δ = W − UW  (positive = weighted network is more fragile at that α)')
+
+# ── Critical alpha comparison ─────────────────────────────────────────────────
+print()
+print('=' * 65)
+print('CRITICAL α  (first α where damage < 0.05)')
+print('=' * 65)
+print(f'  {"Node":<28}  {"UW crit α":>10}  {"W crit α":>10}  {"Δ":>8}')
+print('  ' + '-' * 63)
+for lbl in sw_nodes:
+    _, G_uw_vals = sweep_results[lbl]
+    _, G_w_vals  = sweep_results_w[lbl]
+    ca_uw = crit_alpha(1 - np.array(G_uw_vals), ALPHAS)
+    ca_w  = crit_alpha(1 - np.array(G_w_vals),  ALPHAS)
+    print(f'  {lbl:<28}  {ca_uw:>10.3f}  {ca_w:>10.3f}  {ca_w - ca_uw:>+8.3f}')
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 2 — Hub attack brain MP4s
@@ -298,7 +405,9 @@ def make_hub_mp4(alpha, tag, accent_color, attack=None, out_dir=None):
         out_dir = node_dir(attack_name)
 
     print(f'\n=== HUB ATTACK  α={alpha}  ({tag}) ===')
-    G_metric, n_failed, history = motter_lai(sc_ctx, attack, alpha, return_history=True)
+    G_metric, n_failed, history = motter_lai(sc_ctx, attack, alpha,
+                                              return_history=True,
+                                              L0_arr=_L0_precomputed)
     print(f'  G={G_metric:.3f}  failed={n_failed}  rounds={len(history)-1}')
 
     cumulative = []
@@ -324,7 +433,7 @@ def make_hub_mp4(alpha, tag, accent_color, attack=None, out_dir=None):
     brain_axes(fig, ax)
 
     fig.suptitle(
-        f'Hub Attack — {attack_name}  |  α = {alpha}  '
+        f'Hub Attack — {attack_name}  |  α = {alpha}  [Unweighted]  '
         f'({"cascade failure" if G_metric < 0.85 else "contained"})',
         color=accent_color, fontsize=11, fontweight='bold', y=0.97)
 
@@ -378,54 +487,80 @@ def make_hub_mp4(alpha, tag, accent_color, attack=None, out_dir=None):
                                     interval=1000 // FPS, blit=True)
     out = os.path.join(out_dir, f'{tag}.mp4')
     anim.save(out, writer=animation.FFMpegWriter(
-        fps=FPS, bitrate=2000,
-        extra_args=['-vcodec', 'libx264', '-pix_fmt', 'yuv420p']), dpi=130)
+        fps=FPS, bitrate=1500,
+        extra_args=['-vcodec', 'libx264', '-pix_fmt', 'yuv420p',
+                    '-preset', 'fast', '-crf', '23']), dpi=110)
     plt.close(fig)
     print(f'Saved: {out}')
-    _save_result_png(attack, final_failed, survived, G_metric, alpha, accent_color, tag, out_dir)
+    # Return simulation data so the caller can build the combined 2×2 result PNG
+    return dict(attack=attack, final_failed=final_failed, G_metric=G_metric,
+                alpha=alpha, color=accent_color, tag=tag, out_dir=out_dir)
 
 
-def _save_result_png(attack, final_failed, survived, G_metric, alpha, accent_color, tag, out_dir=None):
-    if out_dir is None:
-        out_dir = node_dir(str(sc_ctx_labels[attack]))
-    fig, ax = plt.subplots(figsize=(9, 9), facecolor=BG)
-    fig.subplots_adjust(top=0.93, bottom=0.02, left=0.02, right=0.98)
-    brain_axes(fig, ax)
-    fig.suptitle(
-        f'Hub Attack — {sc_ctx_labels[attack]}  |  α = {alpha}  '
-        f'({"cascade failure" if G_metric < 0.85 else "contained"})  →  G = {G_metric:.2f}',
-        color=accent_color, fontsize=11, fontweight='bold', y=0.97)
+def _draw_brain_state(ax, attack, failed_set, accent_color, title):
+    """Draw one brain panel (start or end state) into ax."""
+    brain_axes(None, ax)
 
-    for u, v, seg, lw in zip(
-        [e[0] for e in draw_edges], [e[1] for e in draw_edges],
-        draw_edge_segs, draw_edge_lw
-    ):
-        both = u not in final_failed and v not in final_failed
+    # Edges — alive edges full colour, dead edges faded
+    for (u, v), seg, lw in zip(draw_edges, draw_edge_segs, draw_edge_lw):
+        both = u not in failed_set and v not in failed_set
         xs = [seg[0][0], seg[1][0]]; ys = [seg[0][1], seg[1][1]]
-        ax.plot(xs, ys, '-', color='#2a4a6a' if both else '#111122',
-                lw=lw if both else 0.3, alpha=0.35 if both else 0.08, zorder=2)
+        ax.plot(xs, ys, '-',
+                color='#2a4a6a' if both else '#111122',
+                lw=lw if both else 0.3,
+                alpha=0.35 if both else 0.08, zorder=2)
 
-    for ci, c in enumerate(unique_comms):
-        members = [i for i in range(N) if labels_leiden[i] == c]
-        ax.scatter([], [], c=comm_color[c], s=40, label=f'C{c}  (n={len(members)})',
-                   edgecolors='white', linewidths=0.4)
-    ax.legend(loc='lower left', fontsize=7, facecolor='#0d0d1a',
-              edgecolor='#334455', labelcolor='white', framealpha=0.85)
+    colors = [base_colors[i] if i not in failed_set else '#111122' for i in range(N)]
+    sizes  = [55 if i not in failed_set else 18 for i in range(N)]
+    ec     = ['white' if i not in failed_set else '#222233' for i in range(N)]
+    ax.scatter(xy[:, 0], xy[:, 1], s=[s * 3.5 for s in sizes],
+               c=colors, alpha=0.12, edgecolors='none', zorder=3)
+    ax.scatter(xy[:, 0], xy[:, 1], s=sizes, c=colors,
+               edgecolors=ec, linewidths=0.5, zorder=4)
 
-    colors = [base_colors[i] if i not in final_failed else '#111122' for i in range(N)]
-    sizes  = [55 if i not in final_failed else 20 for i in range(N)]
-    ec     = ['white' if i not in final_failed else '#222233' for i in range(N)]
-    ax.scatter(xy[:, 0], xy[:, 1], s=sizes, c=colors, edgecolors=ec,
-               linewidths=0.5, zorder=4)
-    ax.scatter([xy[attack, 0]], [xy[attack, 1]], s=200, marker='x',
-               c=accent_color, linewidths=2, zorder=7)
-    ax.text(0, 88,
-            f'G = {G_metric:.2f}  |  {len(final_failed)} regions failed  |  {N - len(final_failed)} survived',
-            ha='center', va='center', fontsize=8.5, color='#ddeeff', fontweight='bold',
-            path_effects=[pe.withStroke(linewidth=1.5, foreground='black')], zorder=11)
+    # Attack node marker
+    ax.scatter([xy[attack, 0]], [xy[attack, 1]], s=260, marker='*',
+               c=accent_color, edgecolors='#ffff00', linewidths=0.8, zorder=7)
+
+    ax.set_title(title, color=accent_color, fontsize=9, fontweight='bold', pad=5)
+
+
+def save_combined_result_png(attack, good, bad, out_dir):
+    """
+    2×2 result figure per hub-attack node.
+      Row 0 (top)    — good scenario (high α, contained)
+      Row 1 (bottom) — bad  scenario (low α, cascade failure)
+      Col 0 (left)   — initial state (all alive, attack node marked)
+      Col 1 (right)  — final state   (failed nodes dimmed)
+    """
+    attack_name = str(sc_ctx_labels[attack])
+    fig, axes = plt.subplots(2, 2, figsize=(16, 16), facecolor=BG)
+    fig.suptitle(f'Hub Attack — {attack_name}  |  Cascade Outcome Comparison',
+                 color='white', fontsize=13, fontweight='bold', y=1.005)
+
+    empty_set = frozenset()
+    rows = [
+        ('GOOD', good['alpha'], good['color'], good['final_failed'], good['G_metric']),
+        ('BAD',  bad['alpha'],  bad['color'],  bad['final_failed'],  bad['G_metric']),
+    ]
+    for row_i, (label, alpha, color, final_failed, G_metric) in enumerate(rows):
+        survived = N - len(final_failed)
+        outcome  = 'Contained' if G_metric >= 0.85 else 'Cascade Failure'
+
+        _draw_brain_state(axes[row_i, 0], attack, empty_set, color,
+                          f'{label}  α={alpha}  — Initial state  (all {N} alive)')
+        _draw_brain_state(axes[row_i, 1], attack, final_failed, color,
+                          f'{label}  α={alpha}  — Final state  '
+                          f'G={G_metric:.2f}  {survived}/{N} survived  [{outcome}]')
+
+    # Row labels on the left edge
+    for row_i, txt in enumerate(['GOOD (high α)', 'BAD (low α)']):
+        fig.text(0.01, 0.75 - row_i * 0.5, txt,
+                 va='center', ha='left', rotation=90,
+                 color='white', fontsize=11, fontweight='bold')
 
     plt.tight_layout()
-    out = os.path.join(out_dir, f'{tag}_result.png')
+    out = os.path.join(out_dir, 'result_comparison.png')
     plt.savefig(out, dpi=150, bbox_inches='tight', facecolor=BG)
     plt.close(fig)
     print(f'Saved: {out}')
@@ -452,8 +587,7 @@ BRAAK_STAGES = [
 
 
 def run_ad_staged(alpha=0.1):
-    L0 = nx.betweenness_centrality(G_uw, normalized=False)
-    C  = {i: (1 + alpha) * L0[i] for i in range(N)}
+    C = {i: (1 + alpha) * float(_L0_precomputed[i]) for i in range(N)}
     all_removed = set()
     history = []
     for stage_label, forced_nodes in BRAAK_STAGES:
@@ -675,8 +809,9 @@ def make_ad_mp4(alpha=0.1):
                                     interval=1000 // FPS, blit=True)
     out = os.path.join(FIGS_DIR, 'hcp_ml_brain_ad.mp4')
     anim.save(out, writer=animation.FFMpegWriter(
-        fps=FPS, bitrate=2000,
-        extra_args=['-vcodec', 'libx264', '-pix_fmt', 'yuv420p']), dpi=130)
+        fps=FPS, bitrate=1500,
+        extra_args=['-vcodec', 'libx264', '-pix_fmt', 'yuv420p',
+                    '-preset', 'fast', '-crf', '23']), dpi=110)
     plt.close(fig)
     print(f'Saved: {out}')
 
@@ -686,10 +821,127 @@ def make_ad_mp4(alpha=0.1):
 # ══════════════════════════════════════════════════════════════════════════════
 if __name__ == '__main__':
     for entry in CFG['hub_attacks']:
-        attack_idx = resolve_node(entry['label'])
+        attack_idx   = resolve_node(entry['label'])
+        out_d        = node_dir(entry['label'])
+        scenario_res = []
         for sc in entry['scenarios']:
-            make_hub_mp4(alpha=sc['alpha'], tag=sc['tag'],
-                         accent_color=sc['color'], attack=attack_idx)
+            res = make_hub_mp4(alpha=sc['alpha'], tag=sc['tag'],
+                               accent_color=sc['color'], attack=attack_idx,
+                               out_dir=out_d)
+            scenario_res.append(res)
+
+        # Sort by G_metric: higher G = good (contained), lower G = bad (cascade)
+        scenario_res.sort(key=lambda r: r['G_metric'], reverse=True)
+        good_res, bad_res = scenario_res[0], scenario_res[-1]
+        save_combined_result_png(attack_idx, good_res, bad_res, out_d)
 
     make_ad_mp4(alpha=CFG['ad_cascade']['alpha'])
+
+    # ── Centrality-G correlation analysis ─────────────────────────────────────
+    from scipy.stats import pearsonr, spearmanr
+    from HCP_Centrality.model import (
+        load_sc_graph, compute_degree_centrality, compute_betweenness_centrality,
+        compute_closeness_centrality, compute_eigenvector_centrality,
+    )
+
+    print('\n=== CENTRALITY–CASCADE VULNERABILITY CORRELATION ===')
+    print('Computing centrality measures from HCP_Centrality…')
+
+    sc_c, lbl_c, n_c, G_c = load_sc_graph()
+    deg_arr  = compute_degree_centrality(G_c, n_c)
+    btw_arr  = compute_betweenness_centrality(G_c, n_c)
+    cls_arr  = compute_closeness_centrality(G_c, n_c)
+    eig_arr  = compute_eigenvector_centrality(G_c, n_c)
+
+    centralities = [
+        ('Degree',      deg_arr),
+        ('Betweenness', btw_arr),
+        ('Closeness',   cls_arr),
+        ('Eigenvector', eig_arr),
+    ]
+
+    CORR_ALPHAS = [0.10, 0.25, 0.40]
+    print(f'Computing G for all {n_c} nodes at α ∈ {CORR_ALPHAS} (parallelised)…')
+
+    def _g_worker(args):
+        node_i, alpha, A, L0 = args
+        return motter_lai(A, node_i, alpha, L0_arr=L0)[0]
+
+    corr_lines = []
+    G_by_alpha = {}
+    for alpha in CORR_ALPHAS:
+        args = [(i, alpha, sc_ctx, _L0_precomputed) for i in range(n_c)]
+        with ProcessPoolExecutor() as pool:
+            G_vals = np.array(list(pool.map(_g_worker, args, chunksize=8)))
+        G_by_alpha[alpha] = G_vals
+
+    # ── Build report ──────────────────────────────────────────────────────────
+    sep   = '=' * 82
+    lines = [sep,
+             'CENTRALITY–CASCADE VULNERABILITY CORRELATION',
+             'Correlating each node\'s centrality score with its cascade G  '
+             '(G = surviving fraction of LCC)',
+             'Pearson r measures linear association; Spearman ρ is rank-based '
+             '(robust to outliers).',
+             'A negative correlation means higher centrality → more damage when that node fails.',
+             sep, '']
+
+    for alpha in CORR_ALPHAS:
+        G_arr = G_by_alpha[alpha]
+        dmg   = 1 - G_arr
+        lines.append(f'α = {alpha}  (mean G = {G_arr.mean():.3f}, '
+                     f'mean damage = {dmg.mean():.3f})')
+        lines.append('-' * 60)
+        lines.append(f'  {"Centrality":<14} {"Pearson r":>10} {"p-value":>10} '
+                     f'{"Spearman ρ":>12} {"p-value":>10}  Interpretation')
+        lines.append('  ' + '-' * 74)
+        for name, c_arr in centralities:
+            r_p, p_p = pearsonr(c_arr, dmg)
+            r_s, p_s = spearmanr(c_arr, dmg)
+            sig_p = '***' if p_p < 0.001 else ('**' if p_p < 0.01 else ('*' if p_p < 0.05 else ''))
+            sig_s = '***' if p_s < 0.001 else ('**' if p_s < 0.01 else ('*' if p_s < 0.05 else ''))
+            interp = ('strong predictor' if abs(r_s) > 0.5 else
+                      'moderate predictor' if abs(r_s) > 0.3 else 'weak predictor')
+            direction = '(higher → more damage)' if r_s > 0 else '(higher → less damage)'
+            lines.append(f'  {name:<14} {r_p:>+10.4f} {p_p:>9.4f}{sig_p:<3} '
+                         f'{r_s:>+12.4f} {p_s:>9.4f}{sig_s:<3}  {interp} {direction}')
+        lines.append('')
+
+    # ── Best predictor summary ─────────────────────────────────────────────────
+    lines.append(sep)
+    lines.append('BEST PREDICTOR PER ALPHA  (by |Spearman ρ|)')
+    lines.append('-' * 60)
+    for alpha in CORR_ALPHAS:
+        G_arr = G_by_alpha[alpha]
+        dmg   = 1 - G_arr
+        best_name, best_r = max(
+            ((name, spearmanr(c_arr, dmg).statistic) for name, c_arr in centralities),
+            key=lambda x: abs(x[1]))
+        lines.append(f'  α={alpha}:  {best_name:<14}  ρ = {best_r:+.4f}')
+    lines.append('')
+
+    # ── Per-node top-10 most vulnerable ───────────────────────────────────────
+    for alpha in CORR_ALPHAS:
+        G_arr = G_by_alpha[alpha]
+        dmg   = 1 - G_arr
+        top10 = np.argsort(dmg)[-10:][::-1]
+        lines.append(f'TOP-10 MOST VULNERABLE NODES  (α={alpha}, highest damage)')
+        lines.append('-' * 60)
+        lines.append(f'  {"Rank":<5} {"Region":<28} {"Damage":>8}  {"Degree":>8} '
+                     f'{"Betweenness":>12} {"Closeness":>10} {"Eigenvector":>12}')
+        lines.append('  ' + '-' * 80)
+        for rank, i in enumerate(top10, 1):
+            lines.append(f'  {rank:<5} {str(lbl_c[i]):<28} {dmg[i]:>8.4f}  '
+                         f'{deg_arr[i]:>8.4f} {btw_arr[i]:>12.4f} '
+                         f'{cls_arr[i]:>10.4f} {eig_arr[i]:>12.4f}')
+        lines.append('')
+
+    report = '\n'.join(lines)
+    print('\n' + report)
+
+    txt_out = os.path.join(FIGS_DIR, 'centrality_vulnerability_correlation.txt')
+    with open(txt_out, 'w') as f:
+        f.write(report)
+    print(f'\nSaved: {txt_out}')
+
     print('\nDone.')

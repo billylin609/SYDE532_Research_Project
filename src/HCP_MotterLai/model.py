@@ -34,7 +34,25 @@ def load_sc_and_loads():
     return sc_ctx, sc_ctx_labels, N, A_bin, G_w, G_uw, L0_uw_arr, L0_w_arr, degree_arr
 
 
-def motter_lai(A, attack_node, alpha, weighted=False, return_history=False):
+def precompute_L0(A, weighted=False):
+    """Compute initial betweenness loads on the full graph.
+
+    Call once and pass the result to motter_lai via L0_arr to avoid
+    recomputing the same full-graph betweenness on every simulation call.
+    """
+    N_total = A.shape[0]
+    if weighted:
+        G = nx.from_numpy_array(A)
+        for u, v, d in G.edges(data=True):
+            d['distance'] = 1.0 / (d['weight'] + 1e-9)
+        L0 = nx.betweenness_centrality(G, weight='distance', normalized=False)
+    else:
+        G = nx.from_numpy_array((A > 0).astype(float))
+        L0 = nx.betweenness_centrality(G, normalized=False)
+    return np.array([L0[i] for i in range(N_total)])
+
+
+def motter_lai(A, attack_node, alpha, weighted=False, return_history=False, L0_arr=None):
     """
     Simulate one Motter-Lai cascade.
 
@@ -45,6 +63,9 @@ def motter_lai(A, attack_node, alpha, weighted=False, return_history=False):
     alpha       : tolerance parameter  C_j = (1+alpha) * L_j(0)
     weighted    : if True use inverse-weight shortest paths for betweenness
     return_history : if True also return per-round removal history
+    L0_arr      : precomputed initial loads array (from precompute_L0).
+                  Pass this to avoid recomputing betweenness on the full graph
+                  for every call — critical for alpha sweeps over many alphas.
 
     Returns
     -------
@@ -69,9 +90,12 @@ def motter_lai(A, attack_node, alpha, weighted=False, return_history=False):
         return nx.betweenness_centrality(G, normalized=False)
 
     all_nodes = list(range(N_total))
-    G0 = build_graph(A, all_nodes)
-    L0 = get_betweenness(G0, weighted)
-    C = {i: (1 + alpha) * L0[i] for i in range(N_total)}
+    if L0_arr is None:
+        G0 = build_graph(A, all_nodes)
+        L0 = get_betweenness(G0, weighted)
+        C = {i: (1 + alpha) * L0[i] for i in range(N_total)}
+    else:
+        C = {i: (1 + alpha) * float(L0_arr[i]) for i in range(N_total)}
 
     active = [i for i in all_nodes if i != attack_node]
     removed = {attack_node}

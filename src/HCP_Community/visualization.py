@@ -1,9 +1,9 @@
 """
 HCP Community Detection — combined visualization.
 
-Figure 1: Three-method comparison (sorted adjacency matrices)
-Figure 2: Leiden focused — detailed matrix + community breakdown
-Figure 3: Leiden brain partition — axial anatomy view
+Figure 1: 2×3 grid — top row: three adjacency matrices, bottom row: three brain views
+Figure 2: Large Leiden matrix only
+Figure 3: Unannotated raw brain (nodes + edges, no labels/legend/title)
 """
 import os, sys
 os.environ.setdefault('VTK_DEFAULT_RENDER_WINDOW_TYPE', 'OSMesa')
@@ -84,117 +84,7 @@ for cid in np.unique(labels_ld):
     label_str = f'C{cid}: {fn.split("(")[0].strip()[:22]}'
     print(f'  {label_str:<28} {len(members):>5}  {deg_c[members].mean():>14.6f} {btw_c[members].mean():>19.6f} {cls_c[members].mean():>17.6f}')
 
-# ══════════════════════════════════════════════════════════════════════════════
-# FIGURE 1 — Three-method comparison: sorted adjacency matrices
-# ══════════════════════════════════════════════════════════════════════════════
-fig, axes = plt.subplots(1, 3, figsize=(20, 7), facecolor=BG)
-fig.suptitle('Community Detection — Sorted Adjacency Matrix Comparison',
-             color='white', fontsize=15, fontweight='bold', y=1.01)
-
-for ax, (name, labs, Q, accent) in zip(axes, methods):
-    ax.set_facecolor('#0f0f1a')
-
-    sort_order = np.argsort(labs)
-    sc_sorted  = sc_ctx[np.ix_(sort_order, sort_order)]
-    _, counts  = np.unique(labs[sort_order], return_counts=True)
-    boundaries = np.cumsum(counts)[:-1] - 0.5
-    n_comm     = len(counts)
-
-    im = ax.imshow(np.log1p(sc_sorted), cmap='inferno', aspect='auto',
-                   interpolation='nearest')
-
-    for b in boundaries:
-        ax.axhline(b, color=accent, lw=1.2, alpha=0.9)
-        ax.axvline(b, color=accent, lw=1.2, alpha=0.9)
-
-    labelled = label_communities(labs, name, sc_ctx_labels, known_networks,
-                                  strength_arr, btw_arr)
-    cum = 0
-    for i, cnt in enumerate(counts):
-        mid = cum + cnt / 2
-        cid = np.unique(labs[sort_order])[i]
-        fn  = labelled.loc[labelled['Community ID'] == cid, 'Functional Label'].values[0]
-        ax.text(mid, mid, f'C{cid}\n{fn.split("(")[0].strip()[:12]}',
-                ha='center', va='center', fontsize=6, color='white', fontweight='bold',
-                path_effects=[pe.withStroke(linewidth=1.5, foreground='black')])
-        cum += cnt
-
-    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04,
-                 label='log(streamlines + 1)')
-    ax.set_title(f'{name}\nQ = {Q:.4f}  |  {n_comm} communities',
-                  color='white', fontsize=11, fontweight='bold', pad=8)
-    ax.set_xlabel('Region (sorted by community)', color='#aabbcc', fontsize=9)
-    ax.set_ylabel('Region (sorted by community)', color='#aabbcc', fontsize=9)
-    ax.tick_params(colors='#667788', labelsize=7)
-    for spine in ax.spines.values():
-        spine.set_edgecolor('#334455')
-
-plt.tight_layout(rect=[0, 0, 1, 1])
-out1 = os.path.join(FIGS_DIR, 'hcp_community_compare.png')
-plt.savefig(out1, dpi=150, facecolor=BG, bbox_inches='tight')
-plt.close(fig)
-print(f'Saved: {out1}')
-
-# ══════════════════════════════════════════════════════════════════════════════
-# FIGURE 2 — Leiden focused: detailed matrix + community breakdown
-# ══════════════════════════════════════════════════════════════════════════════
-labelled_ld = label_communities(labels_ld, 'Leiden', sc_ctx_labels,
-                                 known_networks, strength_arr, btw_arr)
-
-sort_order_ld = np.argsort(labels_ld)
-sc_sorted_ld  = sc_ctx[np.ix_(sort_order_ld, sort_order_ld)]
-unique_ld, counts_ld = np.unique(labels_ld[sort_order_ld], return_counts=True)
-boundaries_ld = np.cumsum(counts_ld)[:-1] - 0.5
-n_comm_ld     = len(unique_ld)
-comm_colors_ld = {c: COMM_PALETTE[i % len(COMM_PALETTE)]
-                  for i, c in enumerate(unique_ld)}
-
-fig, ax = plt.subplots(1, 1, figsize=(9, 8), facecolor=BG)
-fig.suptitle(f'Leiden Community Detection — Detailed View  (Q = {Q_ld:.4f})',
-             color='white', fontsize=14, fontweight='bold')
-
-ax.set_facecolor('#0f0f1a')
-im = ax.imshow(np.log1p(sc_sorted_ld), cmap='inferno', aspect='auto',
-               interpolation='nearest')
-for b in boundaries_ld:
-    ax.axhline(b, color='#4A90D9', lw=1.5, alpha=0.95)
-    ax.axvline(b, color='#4A90D9', lw=1.5, alpha=0.95)
-
-# Community midpoint tick labels
-mids = []
-cum  = 0
-for i, (cid, cnt) in enumerate(zip(unique_ld, counts_ld)):
-    mid = cum + cnt / 2
-    fn  = labelled_ld.loc[labelled_ld['Community ID'] == cid, 'Functional Label'].values[0]
-    ax.text(mid, mid, f'C{cid}\n{fn.split("(")[0].strip()[:12]}',
-            ha='center', va='center', fontsize=6.5, color='white', fontweight='bold',
-            path_effects=[pe.withStroke(linewidth=1.8, foreground='black')])
-    # Color band on the left edge
-    ax.barh(cum - 0.5, -3, height=cnt, left=0, color=comm_colors_ld[cid],
-            align='edge', zorder=5)
-    mids.append(mid)
-    cum += cnt
-
-plt.colorbar(im, ax=ax, fraction=0.04, pad=0.02, label='log(streamlines + 1)')
-ax.set_title('Adjacency Matrix (sorted by community)', color='white',
-              fontsize=11, fontweight='bold')
-ax.set_xlabel('Region (sorted)', color='#aabbcc', fontsize=9)
-ax.set_ylabel('Region (sorted)', color='#aabbcc', fontsize=9)
-ax.tick_params(colors='#667788', labelsize=7)
-for spine in ax.spines.values():
-    spine.set_edgecolor('#334455')
-
-plt.tight_layout()
-out2 = os.path.join(FIGS_DIR, 'hcp_leiden_detail.png')
-plt.savefig(out2, dpi=150, facecolor=BG, bbox_inches='tight')
-plt.close(fig)
-print(f'Saved: {out2}')
-
-# ══════════════════════════════════════════════════════════════════════════════
-# FIGURE 3 — All three methods: brain anatomy partition view
-# ══════════════════════════════════════════════════════════════════════════════
-
-# MNI centroids for DK-68 cortical atlas (left hemisphere — mirrored for right)
+# ── MNI coordinates ────────────────────────────────────────────────────────────
 DK_MNI_LEFT = {
     'bankssts':               (-54, -40, 12),
     'caudalanteriorcingulate': ( -8,  12, 38),
@@ -253,44 +143,39 @@ for lbl in ctx_lbl:
 for lbl in sctx_lbl:
     coords.append(SCTX_MNI.get(str(lbl).lower(), (0, 0, 0)))
 coords = np.array(coords)
-xy     = coords[:, :2]   # axial projection (x=LR, y=AP)
+xy     = coords[:, :2]
 
 is_sctx      = np.array([i >= 68 for i in range(n)])
 edges        = list(G_w.edges(data=True))
 edge_weights = np.array([d['weight'] for _, _, d in edges])
 nonzero_w    = edge_weights[edge_weights > 0]
-threshold    = np.percentile(nonzero_w, 55)      # top 45% of actual connections
+threshold    = np.percentile(nonzero_w, 55)
 w_min, w_max = threshold, nonzero_w.max()
 
 KEY = {'precuneus', 'posteriorcingulate', 'precentral', 'superiorfrontal',
        'insula', 'superiortemporal', 'inferiorparietal', 'thal', 'hippo'}
 
-fig, axes = plt.subplots(1, 3, figsize=(27, 9), facecolor=BG)
-fig.suptitle('Community Detection — Brain Anatomy View  (Axial MNI Projection)',
-             color='white', fontsize=15, fontweight='bold', y=1.01)
 
-for ax, (name, labs, Q, _accent) in zip(axes, methods):
+def _draw_brain_panel(ax, labs, name, Q, accent):
+    """Shared brain drawing logic for one panel."""
     unique_comms = np.unique(labs)
     comm_color   = {c: COMM_PALETTE[i % len(COMM_PALETTE)]
                     for i, c in enumerate(unique_comms)}
     labelled_m   = label_communities(labs, name, sc_ctx_labels,
                                       known_networks, strength_arr, btw_arr)
-
     ax.set_facecolor(BG)
     ax.set_aspect('equal')
     ax.axis('off')
 
-    # Brain silhouette
     ax.add_patch(Ellipse((0, -10), width=155, height=182,
                          facecolor='#0c111e', edgecolor='#2a3a4a',
                          linewidth=2.0, zorder=0))
     ax.axvline(0, color='#2a3a4a', lw=1.0, alpha=0.6, zorder=1)
-    ax.text(-62, 82, 'L', color='#5a7a8a', fontsize=12, fontweight='bold', ha='center')
-    ax.text( 62, 82, 'R', color='#5a7a8a', fontsize=12, fontweight='bold', ha='center')
-    ax.text(  0, 96, 'Anterior',  color='#4a6a7a', fontsize=8, ha='center')
-    ax.text(  0,-98, 'Posterior', color='#4a6a7a', fontsize=8, ha='center')
+    ax.text(-62, 82, 'L', color='#5a7a8a', fontsize=10, fontweight='bold', ha='center')
+    ax.text( 62, 82, 'R', color='#5a7a8a', fontsize=10, fontweight='bold', ha='center')
+    ax.text(  0, 96, 'Ant',  color='#4a6a7a', fontsize=7, ha='center')
+    ax.text(  0,-98, 'Post', color='#4a6a7a', fontsize=7, ha='center')
 
-    # Top-50% edges, thickness scaled by weight
     for (u, v, d), w in zip(edges, edge_weights):
         if w < threshold or u >= n or v >= n:
             continue
@@ -302,7 +187,6 @@ for ax, (name, labs, Q, _accent) in zip(axes, methods):
         ax.plot([xy[u, 0], xy[v, 0]], [xy[u, 1], xy[v, 1]],
                 '-', color=col, lw=lw, alpha=alp, zorder=2)
 
-    # Nodes
     for i in range(n):
         x, y   = xy[i]
         color  = comm_color[labs[i]]
@@ -313,7 +197,6 @@ for ax, (name, labs, Q, _accent) in zip(axes, methods):
         ax.scatter(x, y, s=sz, c=[color],
                    edgecolors='white', linewidths=0.6, zorder=4, marker=marker)
 
-    # Key region labels
     for i, lbl in enumerate(sc_ctx_labels):
         s = str(lbl).replace('L_', '').replace('R_', '').lower()
         if any(k in s for k in KEY):
@@ -323,23 +206,164 @@ for ax, (name, labs, Q, _accent) in zip(axes, methods):
 
     ax.set_xlim(-95, 95)
     ax.set_ylim(-110, 110)
-    ax.set_title(f'{name}\nQ = {Q:.4f}  |  {len(unique_comms)} communities',
-                  color='white', fontsize=11, fontweight='bold', pad=10)
 
-    # Per-panel community legend
     handles = []
     for cid in unique_comms:
         fn   = labelled_m.loc[labelled_m['Community ID'] == cid, 'Functional Label'].values[0]
         size = int((labs == cid).sum())
         handles.append(mpatches.Patch(
             color=comm_color[cid],
-            label=f'C{cid}: {fn.split("(")[0].strip()[:16]} (n={size})'))
+            label=f'C{cid}: {fn.split("(")[0].strip()[:14]} (n={size})'))
     ax.legend(handles=handles, loc='lower left',
               facecolor='#0d0d1a', edgecolor='#334455',
-              labelcolor='white', fontsize=7, framealpha=0.92, borderpad=0.6)
+              labelcolor='white', fontsize=6, framealpha=0.92, borderpad=0.5)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FIGURE 1 — 2×3: top = adjacency matrices, bottom = brain views
+# ══════════════════════════════════════════════════════════════════════════════
+fig = plt.figure(figsize=(27, 18), facecolor=BG)
+fig.suptitle('HCP Community Detection — Matrix & Brain Anatomy Comparison',
+             color='white', fontsize=16, fontweight='bold', y=1.005)
+
+axes_top = [fig.add_subplot(2, 3, i + 1) for i in range(3)]
+axes_bot = [fig.add_subplot(2, 3, i + 4) for i in range(3)]
+
+# ── Top row: adjacency matrices ───────────────────────────────────────────────
+for ax, (name, labs, Q, accent) in zip(axes_top, methods):
+    ax.set_facecolor('#0f0f1a')
+
+    sort_order = np.argsort(labs)
+    sc_sorted  = sc_ctx[np.ix_(sort_order, sort_order)]
+    _, counts  = np.unique(labs[sort_order], return_counts=True)
+    boundaries = np.cumsum(counts)[:-1] - 0.5
+    n_comm     = len(counts)
+
+    im = ax.imshow(np.log1p(sc_sorted), cmap='inferno', aspect='auto',
+                   interpolation='nearest')
+
+    for b in boundaries:
+        ax.axhline(b, color=accent, lw=1.2, alpha=0.9)
+        ax.axvline(b, color=accent, lw=1.2, alpha=0.9)
+
+    labelled = label_communities(labs, name, sc_ctx_labels, known_networks,
+                                  strength_arr, btw_arr)
+    cum = 0
+    for i, cnt in enumerate(counts):
+        mid = cum + cnt / 2
+        cid = np.unique(labs[sort_order])[i]
+        fn  = labelled.loc[labelled['Community ID'] == cid, 'Functional Label'].values[0]
+        ax.text(mid, mid, f'C{cid}\n{fn.split("(")[0].strip()[:12]}',
+                ha='center', va='center', fontsize=6, color='white', fontweight='bold',
+                path_effects=[pe.withStroke(linewidth=1.5, foreground='black')])
+        cum += cnt
+
+    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04,
+                 label='log(streamlines + 1)')
+    ax.set_title(f'{name}\nQ = {Q:.4f}  |  {n_comm} communities',
+                  color='white', fontsize=11, fontweight='bold', pad=8)
+    ax.set_xlabel('Region (sorted by community)', color='#aabbcc', fontsize=9)
+    ax.set_ylabel('Region (sorted by community)', color='#aabbcc', fontsize=9)
+    ax.tick_params(colors='#667788', labelsize=7)
+    for spine in ax.spines.values():
+        spine.set_edgecolor('#334455')
+
+# ── Bottom row: brain views ───────────────────────────────────────────────────
+for ax, (name, labs, Q, accent) in zip(axes_bot, methods):
+    _draw_brain_panel(ax, labs, name, Q, accent)
+    ax.set_title(f'{name}\nQ = {Q:.4f}  |  {len(np.unique(labs))} communities',
+                  color='white', fontsize=11, fontweight='bold', pad=10)
 
 plt.tight_layout()
-out3 = os.path.join(FIGS_DIR, 'hcp_brain_partition.png')
-plt.savefig(out3, dpi=150, facecolor=BG, bbox_inches='tight')
+out1 = os.path.join(FIGS_DIR, 'hcp_community_overview.png')
+plt.savefig(out1, dpi=150, facecolor=BG, bbox_inches='tight')
+plt.close(fig)
+print(f'Saved: {out1}')
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FIGURE 2 — Large Leiden matrix only
+# ══════════════════════════════════════════════════════════════════════════════
+labelled_ld  = label_communities(labels_ld, 'Leiden', sc_ctx_labels,
+                                  known_networks, strength_arr, btw_arr)
+sort_order_ld = np.argsort(labels_ld)
+sc_sorted_ld  = sc_ctx[np.ix_(sort_order_ld, sort_order_ld)]
+unique_ld, counts_ld = np.unique(labels_ld[sort_order_ld], return_counts=True)
+boundaries_ld = np.cumsum(counts_ld)[:-1] - 0.5
+n_comm_ld     = len(unique_ld)
+comm_colors_ld = {c: COMM_PALETTE[i % len(COMM_PALETTE)]
+                  for i, c in enumerate(unique_ld)}
+
+fig, ax = plt.subplots(1, 1, figsize=(10, 9), facecolor=BG)
+fig.suptitle(f'Leiden Community Detection — Detailed Matrix  (Q = {Q_ld:.4f})',
+             color='white', fontsize=14, fontweight='bold')
+ax.set_facecolor('#0f0f1a')
+
+im = ax.imshow(np.log1p(sc_sorted_ld), cmap='inferno', aspect='auto',
+               interpolation='nearest')
+for b in boundaries_ld:
+    ax.axhline(b, color='#4A90D9', lw=1.5, alpha=0.95)
+    ax.axvline(b, color='#4A90D9', lw=1.5, alpha=0.95)
+
+cum = 0
+for i, (cid, cnt) in enumerate(zip(unique_ld, counts_ld)):
+    mid = cum + cnt / 2
+    fn  = labelled_ld.loc[labelled_ld['Community ID'] == cid, 'Functional Label'].values[0]
+    ax.text(mid, mid, f'C{cid}\n{fn.split("(")[0].strip()[:12]}',
+            ha='center', va='center', fontsize=6.5, color='white', fontweight='bold',
+            path_effects=[pe.withStroke(linewidth=1.8, foreground='black')])
+    ax.barh(cum - 0.5, -3, height=cnt, left=0, color=comm_colors_ld[cid],
+            align='edge', zorder=5)
+    cum += cnt
+
+plt.colorbar(im, ax=ax, fraction=0.04, pad=0.02, label='log(streamlines + 1)')
+ax.set_title('Adjacency Matrix (sorted by community)', color='white',
+              fontsize=11, fontweight='bold')
+ax.set_xlabel('Region (sorted)', color='#aabbcc', fontsize=9)
+ax.set_ylabel('Region (sorted)', color='#aabbcc', fontsize=9)
+ax.tick_params(colors='#667788', labelsize=7)
+for spine in ax.spines.values():
+    spine.set_edgecolor('#334455')
+
+plt.tight_layout()
+out2 = os.path.join(FIGS_DIR, 'hcp_leiden_matrix.png')
+plt.savefig(out2, dpi=150, facecolor=BG, bbox_inches='tight')
+plt.close(fig)
+print(f'Saved: {out2}')
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FIGURE 3 — Unannotated raw brain (no labels, no legend, no title)
+# ══════════════════════════════════════════════════════════════════════════════
+fig, ax = plt.subplots(figsize=(10, 10), facecolor=BG)
+ax.set_facecolor(BG)
+ax.set_aspect('equal')
+ax.axis('off')
+
+ax.add_patch(Ellipse((0, -10), width=155, height=182,
+                     facecolor='#0c111e', edgecolor='#1a2535',
+                     linewidth=1.5, zorder=0))
+ax.axvline(0, color='#1e2d3d', lw=0.8, alpha=0.5, zorder=1)
+
+for (u, v, d), w in zip(edges, edge_weights):
+    if w < threshold or u >= n or v >= n:
+        continue
+    w_norm = (w - w_min) / (w_max - w_min + 1e-9)
+    ax.plot([xy[u, 0], xy[v, 0]], [xy[u, 1], xy[v, 1]],
+            '-', color='#2a4a6a', lw=0.3 + 1.2 * w_norm, alpha=0.35, zorder=2)
+
+for i in range(n):
+    x, y   = xy[i]
+    sz     = 60 if is_sctx[i] else 30
+    marker = 's' if is_sctx[i] else 'o'
+    ax.scatter(x, y, s=sz * 3, c=['#4A90D9'], alpha=0.12,
+               edgecolors='none', zorder=3, marker=marker)
+    ax.scatter(x, y, s=sz, c=['#4A90D9'],
+               edgecolors='white', linewidths=0.5, zorder=4, marker=marker)
+
+ax.set_xlim(-95, 95)
+ax.set_ylim(-110, 110)
+
+plt.tight_layout(pad=0)
+out3 = os.path.join(FIGS_DIR, 'hcp_brain_raw.png')
+plt.savefig(out3, dpi=200, facecolor=BG, bbox_inches='tight')
 plt.close(fig)
 print(f'Saved: {out3}')

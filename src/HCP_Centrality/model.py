@@ -55,20 +55,30 @@ def compute_eigenvalue_spectrum(sc_ctx):
 def compute_global_centrality(G, degree_arr, betweenness_arr, closeness_arr, eigenvec_arr, lambda1):
     """
     Network-level (global) summary metrics.
-      - Global degree centrality     : mean local degree centrality
-      - Global betweenness centrality: mean local betweenness centrality
-      - Global closeness centrality  : mean local closeness centrality
-      - Graph density                : fraction of possible edges present
-      - Spectral radius (λ₁)         : largest eigenvalue of SC matrix
-      - Avg weighted clustering coeff: mean local clustering (weights as edge prob)
+
+    Local closeness per node (slide definition):
+        l_i = 1/(n-1) * sum_j d_ij   (average geodesic distance)
+        C'_c(i) = 1 / l_i = (n-1) / sum_j d_ij   ← what closeness_arr contains
+
+    Global closeness centralization (Freeman, slide formula):
+        C'_c(*) = max_i C'_c(i)
+        C̄'_c = sum_i [C'_c(*) - C'_c(i)] / [(n-1)(n-2)/(2n-3)]
+        = 0 for a ring (all equal), = 1 for a star (maximally centralised)
     """
+    n = len(closeness_arr)
+    C_star     = closeness_arr.max()
+    freeman_num = float(np.sum(C_star - closeness_arr))
+    freeman_den = (n - 1) * (n - 2) / (2 * n - 3)
+    global_closeness_centralization = freeman_num / freeman_den
+
     return {
-        'Global degree centrality':      float(degree_arr.mean()),
-        'Global betweenness centrality': float(betweenness_arr.mean()),
-        'Global closeness centrality':   float(closeness_arr.mean()),
-        'Graph density':                 float(nx.density(G)),
-        'Spectral radius (λ₁)':          float(lambda1),
-        'Avg clustering coefficient':    float(nx.average_clustering(G, weight='weight')),
+        'Global degree centrality':           float(degree_arr.mean()),
+        'Global betweenness centrality':      float(betweenness_arr.mean()),
+        'Global closeness centrality (mean)': float(closeness_arr.mean()),
+        'Closeness centralization C̄ᶜ':        global_closeness_centralization,
+        'Graph density':                      float(nx.density(G)),
+        'Spectral radius (λ₁)':               float(lambda1),
+        'Avg clustering coefficient':         float(nx.average_clustering(G, weight='weight')),
     }
 
 
@@ -87,14 +97,22 @@ def compute_broker_score(degree_arr, betweenness_arr):
 
 def build_centrality_df(sc_ctx_labels, degree_arr, betweenness_arr, closeness_arr,
                          eigenvec_arr):
-    """Build summary DataFrame with centrality measures and ranks."""
+    """Build summary DataFrame with centrality measures and ranks.
+
+    closeness_arr is passed in raw (not normalized); it is min-max scaled here
+    for display so it is on the same [0, 1] scale as degree / betweenness.
+    The raw values must be used for Freeman centralization in compute_global_centrality.
+    """
     broker_arr = compute_broker_score(degree_arr, betweenness_arr)
+
+    r = closeness_arr.max() - closeness_arr.min()
+    closeness_norm = (closeness_arr - closeness_arr.min()) / r if r > 0 else np.zeros_like(closeness_arr)
 
     centrality_df = pd.DataFrame({
         'Region':       sc_ctx_labels,
         'Degree':       degree_arr.round(4),
         'Betweenness':  betweenness_arr.round(4),
-        'Closeness':    closeness_arr.round(4),
+        'Closeness':    closeness_norm.round(4),
         'Eigenvector':  eigenvec_arr.round(4),
         'Broker_score': broker_arr.round(4),
     })
