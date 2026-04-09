@@ -131,11 +131,31 @@ comm_color    = {c: COMM_PALETTE[i % len(COMM_PALETTE)] for i, c in enumerate(un
 base_colors   = [comm_color[labels_leiden[i]] for i in range(N)]
 print(f'  Leiden Q={Q_leiden:.4f}, {len(unique_comms)} communities (82-node run, first 68 used)')
 
-# Top-8% edge mask for drawing
-all_edges  = list(G_w.edges(data=True))
-edge_wts   = np.array([d['weight'] for _, _, d in all_edges])
-edge_thresh = np.percentile(edge_wts, 92)
+# Top-60% of non-zero edges (matching community detection threshold)
+from matplotlib.collections import LineCollection as _LC
+
+all_edges   = list(G_w.edges(data=True))
+edge_wts    = np.array([d['weight'] for _, _, d in all_edges])
+nonzero_wts = edge_wts[edge_wts > 0]
+edge_thresh = np.percentile(nonzero_wts, 40)
+w_min_e, w_max_e = edge_thresh, nonzero_wts.max()
+
 draw_edges  = [(u, v) for u, v, d in all_edges if d['weight'] >= edge_thresh]
+draw_edge_wt = np.array([d['weight'] for u, v, d in all_edges if d['weight'] >= edge_thresh])
+draw_edge_norm = (draw_edge_wt - w_min_e) / (w_max_e - w_min_e + 1e-9)
+draw_edge_lw   = (0.3 + 2.2 * draw_edge_norm).tolist()
+draw_edge_segs = [[[xy[u, 0], xy[u, 1]], [xy[v, 0], xy[v, 1]]] for u, v in draw_edges]
+
+
+def alive_edge_collection(failed_set, alpha=0.35):
+    """Return a LineCollection containing only edges whose both endpoints are alive."""
+    segs, lws = [], []
+    for (u, v), seg, lw in zip(draw_edges, draw_edge_segs, draw_edge_lw):
+        if u not in failed_set and v not in failed_set:
+            segs.append(seg)
+            lws.append(lw)
+    col = _LC(segs, colors='#2a4a6a', linewidths=lws, alpha=alpha, zorder=2)
+    return col, segs, lws
 
 # ── Braak staging — AD-progression node sets ───────────────────────────────────
 def nodes_matching(keywords):
@@ -354,10 +374,9 @@ def make_hub_mp4(alpha, tag, accent_color, attack=None):
                 fontsize=8 if len(txt) > 1 else 11,
                 fontweight='bold', ha='center', va='center')
 
-    # Edges
-    for u, v in draw_edges:
-        ax.plot([xy[u, 0], xy[v, 0]], [xy[u, 1], xy[v, 1]],
-                '-', color='#2a4a6a', lw=0.7, alpha=0.35, zorder=2)
+    # Dynamic edge collection (starts fully alive)
+    edge_col, _segs, _lws = alive_edge_collection(frozenset())
+    ax.add_collection(edge_col)
 
     # Leiden community legend (bottom-left, inside brain area)
     for ci, c in enumerate(unique_comms):
@@ -400,6 +419,13 @@ def make_hub_mp4(alpha, tag, accent_color, attack=None):
 
         if mode == 'cascade':
             update_scatter(scat, glow, failed_now, pulsing=pulsing, sub_f=sub_f)
+            alive_segs, alive_lws = [], []
+            for (u, v), seg, lw in zip(draw_edges, draw_edge_segs, draw_edge_lw):
+                if u not in failed_now and v not in failed_now:
+                    alive_segs.append(seg)
+                    alive_lws.append(lw)
+            edge_col.set_segments(alive_segs)
+            edge_col.set_linewidth(alive_lws)
             if ri == 0:
                 rnd_txt.set_text(f'Round 0  —  Seed removed  ({len(failed_now)} failed)')
             else:
@@ -408,10 +434,17 @@ def make_hub_mp4(alpha, tag, accent_color, attack=None):
                     f'({len(failed_now)}/{N} failed)')
         else:
             update_scatter(scat, glow, final_failed)
+            alive_segs, alive_lws = [], []
+            for (u, v), seg, lw in zip(draw_edges, draw_edge_segs, draw_edge_lw):
+                if u not in final_failed and v not in final_failed:
+                    alive_segs.append(seg)
+                    alive_lws.append(lw)
+            edge_col.set_segments(alive_segs)
+            edge_col.set_linewidth(alive_lws)
             rnd_txt.set_text(
                 f'Cascade complete — G = {G_metric:.2f}  '
                 f'({len(survived)}/{N} survived)')
-        return [scat, glow, rnd_txt]
+        return [scat, glow, rnd_txt, edge_col]
 
     anim = animation.FuncAnimation(fig, update, frames=len(frame_data),
                                     interval=1000 // FPS, blit=True)
@@ -576,9 +609,8 @@ def make_ad_mp4(alpha=0.1):
                 fontsize=8 if len(txt) > 1 else 12,
                 fontweight='bold', ha='center', va='center')
 
-    for u, v in draw_edges:
-        ax.plot([xy[u, 0], xy[v, 0]], [xy[u, 1], xy[v, 1]],
-                '-', color='#2a4a6a', lw=0.7, alpha=0.35, zorder=2)
+    edge_col_ad, _s, _l = alive_edge_collection(frozenset())
+    ax.add_collection(edge_col_ad)
 
     glow = ax.scatter(xy[:, 0], xy[:, 1], s=200, c=base_colors,
                       alpha=0.12, edgecolors='none', zorder=3)
@@ -599,6 +631,15 @@ def make_ad_mp4(alpha=0.1):
                     path_effects=[pe.withStroke(linewidth=1.5, foreground='black')])
 
     # ── Helper ────────────────────────────────────────────────────────────────
+    def update_edges(failed_set):
+        alive_segs, alive_lws = [], []
+        for (u, v), seg, lw in zip(draw_edges, draw_edge_segs, draw_edge_lw):
+            if u not in failed_set and v not in failed_set:
+                alive_segs.append(seg)
+                alive_lws.append(lw)
+        edge_col_ad.set_segments(alive_segs)
+        edge_col_ad.set_linewidth(alive_lws)
+
     def get_cum_cascade(si, ci):
         cum = set(stage_snapshots[si]['before']) | set(stage_snapshots[si]['forced'])
         for k in range(ci + 1):
@@ -629,6 +670,7 @@ def make_ad_mp4(alpha=0.1):
 
         if tag == 'intro':
             update_scatter(scat, glow, frozenset())
+            update_edges(frozenset())
             update_gbar(g_fill, g_txt, frozenset(), bx, bw)
             set_header('Healthy Brain  —  Initial State',
                        'No regions removed', [], 1.0)
@@ -638,6 +680,7 @@ def make_ad_mp4(alpha=0.1):
             snap = stage_snapshots[si]
             update_scatter(scat, glow, snap['before'],
                            forced=snap['forced'], sub_f=f)
+            update_edges(snap['before'])
             update_gbar(g_fill, g_txt, snap['before'], bx, bw)
             set_header(snap['label'].replace('\n', '  '),
                        f'Removing {len(snap["forced"])} regions:',
@@ -649,6 +692,7 @@ def make_ad_mp4(alpha=0.1):
             snap = stage_snapshots[si]
             failed_now = snap['before'] | snap['forced']
             update_scatter(scat, glow, failed_now)
+            update_edges(failed_now)
             update_gbar(g_fill, g_txt, failed_now, bx, bw)
             G_val = (N - len(failed_now)) / N
             set_header(snap['label'].replace('\n', '  '),
@@ -662,6 +706,7 @@ def make_ad_mp4(alpha=0.1):
                          snap['before'] | snap['forced']
             pulsing = snap['c_rounds'][ci]
             update_scatter(scat, glow, failed_now, pulsing=pulsing, sub_f=f)
+            update_edges(failed_now)
             update_gbar(g_fill, g_txt, failed_now, bx, bw)
             G_val = (N - len(failed_now)) / N
             set_header(snap['label'].replace('\n', '  ') + f'  — Cascade round {ci+1}',
@@ -673,6 +718,7 @@ def make_ad_mp4(alpha=0.1):
             snap = stage_snapshots[si]
             failed_now = get_cum_cascade(si, ci)
             update_scatter(scat, glow, failed_now)
+            update_edges(failed_now)
             update_gbar(g_fill, g_txt, failed_now, bx, bw)
             G_val = (N - len(failed_now)) / N
             set_header(snap['label'].replace('\n', '  ') + f'  — Cascade round {ci+1} done',
@@ -683,6 +729,7 @@ def make_ad_mp4(alpha=0.1):
             _, si, f = fd
             snap = stage_snapshots[si]
             update_scatter(scat, glow, snap['all_after'])
+            update_edges(snap['all_after'])
             update_gbar(g_fill, g_txt, snap['all_after'], bx, bw,
                         label_override=f'G = {snap["G_val"]:.3f}'
                                        f'  ({N-len(snap["all_after"])}/{N} alive)')
@@ -691,6 +738,7 @@ def make_ad_mp4(alpha=0.1):
 
         elif tag == 'result':
             update_scatter(scat, glow, final_all)
+            update_edges(final_all)
             update_gbar(g_fill, g_txt, final_all, bx, bw,
                         accent_color='#f39c12',
                         label_override=f'Network Survival  G = {G_final:.2f}'
@@ -698,7 +746,7 @@ def make_ad_mp4(alpha=0.1):
             set_header(f'All Braak Stages Complete  —  G = {G_final:.2f}',
                        f'{N - len(survived)} regions failed', [], G_final)
 
-        return [scat, glow, g_fill, g_txt, stage_lbl, removed_lbl, removed_body, g_hdr]
+        return [scat, glow, g_fill, g_txt, stage_lbl, removed_lbl, removed_body, g_hdr, edge_col_ad]
 
     anim = animation.FuncAnimation(fig, update, frames=len(frame_data),
                                     interval=1000 // FPS, blit=True)

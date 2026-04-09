@@ -21,6 +21,7 @@ os.environ.setdefault('VTK_DEFAULT_RENDER_WINDOW_TYPE', 'OSMesa')
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.stats import gaussian_kde
 
 from HCP_Centrality.model import run_all
 
@@ -34,90 +35,95 @@ print('Imports successful.')
 # %% — Run full pipeline
 (sc_ctx, sc_ctx_labels, n_ctx, G,
  degree_arr, betweenness_arr, closeness_arr, eigenvec_arr,
- eigenvalues_sorted, lambda1, v1, centrality_df) = run_all()
+ broker_arr, global_metrics, _, lambda1, _, centrality_df) = run_all()
 
-# %% — Visualize: top-15 bar charts for each centrality measure
+# ── shared measure list ────────────────────────────────────────────────────────
 measures = [
-    ('Degree',      degree_arr,      'steelblue'),
-    ('Betweenness', betweenness_arr, 'darkorange'),
-    ('Closeness',   closeness_arr,   'mediumseagreen'),
-    ('Eigenvector', eigenvec_arr,    'mediumpurple'),
+    ('Degree',      degree_arr,      plt.cm.Blues),
+    ('Betweenness', betweenness_arr, plt.cm.Oranges),
+    ('Closeness',   closeness_arr,   plt.cm.Greens),
+    ('Eigenvector', eigenvec_arr,    plt.cm.Purples),
 ]
 
-fig, axes = plt.subplots(2, 2, figsize=(18, 14))
-axes = axes.flatten()
+# %% — Figure 1: Local centrality (ranked bars + density, 2 rows × 4 cols)
+fig, axes = plt.subplots(2, 4, figsize=(24, 12))
 
-for ax, (name, arr, color) in zip(axes, measures):
+# Row 0 — top-15 ranked bar charts
+for ax, (name, arr, cmap) in zip(axes[0], measures):
     top15_idx = np.argsort(arr)[::-1][:15]
     labels_top = [sc_ctx_labels[i] for i in top15_idx]
     values_top = arr[top15_idx]
+    colors = cmap(np.linspace(0.4, 0.85, 15))[::-1]
 
-    colors = plt.cm.Blues(np.linspace(0.4, 0.9, 15))[::-1] if color == 'steelblue' else \
-             plt.cm.Oranges(np.linspace(0.4, 0.9, 15))[::-1] if color == 'darkorange' else \
-             plt.cm.Greens(np.linspace(0.4, 0.9, 15))[::-1] if color == 'mediumseagreen' else \
-             plt.cm.Purples(np.linspace(0.4, 0.9, 15))[::-1]
+    ax.barh(range(15), values_top[::-1], color=colors)
+    ax.set_yticks(range(15))
+    ax.set_yticklabels([f'{i+1}. {l}' for i, l in enumerate(labels_top[::-1])], fontsize=8)
+    ax.set_title(f'{name} Centrality\nTop 15 Regions', fontsize=11, fontweight='bold')
+    ax.set_xlabel('Centrality score', fontsize=9)
+    ax.invert_yaxis()
 
-    ax.barh(labels_top[::-1], values_top[::-1], color=colors)
-    ax.set_title(f'{name} Centrality — Top 15 Regions', fontsize=13, fontweight='bold')
-    ax.set_xlabel(f'{name} centrality score')
-    ax.tick_params(axis='y', labelsize=9)
+# Row 1 — normalized density distributions
+for ax, (name, arr, cmap) in zip(axes[1], measures):
+    color = cmap(0.65)
+    arr_norm = (arr - arr.min()) / (arr.max() - arr.min())
+    kde = gaussian_kde(arr_norm, bw_method='scott')
+    x = np.linspace(0, 1, 300)
+    y = kde(x)
 
-plt.suptitle('HCP SC Network — Centrality Measures (Cortical Regions)',
-             fontsize=15, fontweight='bold')
+    ax.fill_between(x, y, alpha=0.35, color=color)
+    ax.plot(x, y, color=color, linewidth=2)
+    ax.set_title(f'{name} — Density Distribution', fontsize=11, fontweight='bold')
+    ax.set_xlabel('Normalized centrality score', fontsize=9)
+    ax.set_ylabel('Density', fontsize=9)
+    ax.set_xlim(0, 1)
+
+plt.suptitle('HCP SC Network — Local Centrality', fontsize=15, fontweight='bold')
 plt.tight_layout()
-plt.savefig(os.path.join(FIGS_DIR, 'hcp_centrality_bars.png'), dpi=150, bbox_inches='tight')
+plt.savefig(os.path.join(FIGS_DIR, 'hcp_local_centrality.png'), dpi=150, bbox_inches='tight')
 plt.show()
 
-# %% — Eigenvalue spectrum
-fig, axes = plt.subplots(1, 2, figsize=(15, 5))
+# %% — Figure 2: Broker identification
+def _norm(x):
+    r = x.max() - x.min()
+    return (x - x.min()) / r if r > 0 else np.zeros_like(x)
 
-axes[0].plot(eigenvalues_sorted, 'o-', color='steelblue', markersize=4)
-axes[0].axhline(0, color='k', linewidth=0.8, linestyle='--')
-axes[0].axvline(0, color='tomato', linewidth=1.5, linestyle='--', label=f'λ₁ = {lambda1:.2f}')
-axes[0].set_title('Eigenvalue Spectrum of SC Matrix', fontsize=13, fontweight='bold')
-axes[0].set_xlabel('Eigenvalue index (descending)')
-axes[0].set_ylabel('Eigenvalue')
-axes[0].legend()
+bet_norm  = _norm(betweenness_arr)
+deg_norm  = _norm(degree_arr)
+is_broker = centrality_df['is_broker'].values
+top15_broker_idx = np.argsort(broker_arr)[::-1][:15]
 
-v1_abs = np.abs(v1)
-sorted_v1_idx = np.argsort(v1_abs)[::-1]
-axes[1].bar(range(n_ctx), v1_abs[sorted_v1_idx], color='mediumpurple', edgecolor='white', linewidth=0.3)
-axes[1].set_title('Principal Eigenvector |v₁| (region loadings)', fontsize=13, fontweight='bold')
-axes[1].set_xlabel('Region (sorted by |v₁|)')
-axes[1].set_ylabel('|v₁| loading')
-for rank, i in enumerate(sorted_v1_idx[:5]):
-    axes[1].text(rank, v1_abs[i] + 0.001, sc_ctx_labels[i], fontsize=7,
-                 ha='center', va='bottom', rotation=45)
+fig, axes = plt.subplots(1, 2, figsize=(16, 6))
 
-plt.suptitle(f'Spectral Analysis  |  λ₁ = {lambda1:.4f}', fontsize=14, fontweight='bold')
+# Left — betweenness vs degree scatter
+ax = axes[0]
+ax.scatter(deg_norm[~is_broker], bet_norm[~is_broker],
+           s=25, alpha=0.5, color='steelblue', label='Non-broker')
+ax.scatter(deg_norm[is_broker], bet_norm[is_broker],
+           s=60, alpha=0.9, color='tomato', edgecolors='darkred', linewidth=0.8, label='Broker')
+for i in top15_broker_idx[:8]:
+    ax.annotate(sc_ctx_labels[i], (deg_norm[i], bet_norm[i]),
+                fontsize=7, xytext=(4, 4), textcoords='offset points')
+ax.axline((0.5, 0.5), slope=1, color='gray', linestyle='--', linewidth=0.8, alpha=0.5)
+ax.set_xlabel('Normalized Degree Centrality', fontsize=10)
+ax.set_ylabel('Normalized Betweenness Centrality', fontsize=10)
+ax.set_title('Broker Identification\n(above diagonal = high betweenness relative to degree)',
+             fontsize=11, fontweight='bold')
+ax.legend(fontsize=9)
+
+# Right — top-15 broker regions ranked
+ax = axes[1]
+labels_b = [sc_ctx_labels[i] for i in top15_broker_idx]
+values_b  = broker_arr[top15_broker_idx]
+colors_b  = plt.cm.Reds(np.linspace(0.4, 0.85, 15))[::-1]
+ax.barh(range(15), values_b[::-1], color=colors_b)
+ax.set_yticks(range(15))
+ax.set_yticklabels([f'{i+1}. {l}' for i, l in enumerate(labels_b[::-1])], fontsize=8)
+ax.set_title('Top 15 Broker Regions\n(betweenness − degree, normalized)',
+             fontsize=11, fontweight='bold')
+ax.set_xlabel('Broker score', fontsize=9)
+ax.invert_yaxis()
+
+plt.suptitle('HCP SC Network — Broker Nodes', fontsize=14, fontweight='bold')
 plt.tight_layout()
-plt.savefig(os.path.join(FIGS_DIR, 'hcp_eigenspectrum.png'), dpi=150, bbox_inches='tight')
-plt.show()
-
-# %% — Cross-measure scatter matrix
-measure_names = ['Degree', 'Betweenness', 'Closeness', 'Eigenvector']
-measure_arrays = [degree_arr, betweenness_arr, closeness_arr, eigenvec_arr]
-n_m = len(measure_names)
-
-fig, axes = plt.subplots(n_m, n_m, figsize=(14, 14))
-
-for i in range(n_m):
-    for j in range(n_m):
-        ax = axes[i, j]
-        if i == j:
-            ax.hist(measure_arrays[i], bins=20, color='slategray', edgecolor='white')
-            ax.set_title(measure_names[i], fontsize=10, fontweight='bold')
-        else:
-            r = np.corrcoef(measure_arrays[j], measure_arrays[i])[0, 1]
-            ax.scatter(measure_arrays[j], measure_arrays[i], s=18, alpha=0.6,
-                       color='steelblue', edgecolors='none')
-            ax.set_title(f'r = {r:.2f}', fontsize=9)
-        if i == n_m - 1:
-            ax.set_xlabel(measure_names[j], fontsize=9)
-        if j == 0:
-            ax.set_ylabel(measure_names[i], fontsize=9)
-
-plt.suptitle('Centrality Cross-Correlation Matrix', fontsize=14, fontweight='bold')
-plt.tight_layout()
-plt.savefig(os.path.join(FIGS_DIR, 'hcp_centrality_scatter.png'), dpi=150, bbox_inches='tight')
+plt.savefig(os.path.join(FIGS_DIR, 'hcp_brokers.png'), dpi=150, bbox_inches='tight')
 plt.show()

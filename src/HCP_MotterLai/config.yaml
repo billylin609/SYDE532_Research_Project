@@ -1,0 +1,100 @@
+# HCP Motter-Lai simulation configuration
+# ─────────────────────────────────────────
+# Add any cortical region label (as it appears in sc_ctx_labels, e.g. R_precuneus)
+# under hub_attacks to run that node through the cascade simulation.
+# Each node can have multiple alpha scenarios.
+
+# ── Alpha sweep ───────────────────────────────────────────────────────────────
+alpha_sweep:
+  alpha_min:  0.0
+  alpha_max:  1.0
+  n_points:   40
+  nodes:
+    - R_superiorparietal
+    - L_superiorparietal
+    - R_superiorfrontal
+    - L_superiorfrontal
+    - R_parahippocampal
+    - L_parahippocampal
+    - R_medialorbitofrontal
+    - L_medialorbitofrontal
+
+# ── Hub attack simulations ────────────────────────────────────────────────────
+# label : exact string in sc_ctx_labels  OR  "argmax_betweenness" for auto-select
+# scenarios: list of (alpha, output tag, accent colour)
+hub_attacks:
+  - label: R_superiorparietal
+    scenarios:
+      - alpha: 0.10
+        tag:   hcp_ml_brain_R_bad
+        color: "#e74c3c"
+      - alpha: 0.40
+        tag:   hcp_ml_brain_R_good
+        color: "#27ae60"
+
+  - label: L_superiorparietal
+    scenarios:
+      - alpha: 0.10
+        tag:   hcp_ml_brain_L_bad
+        color: "#f39c12"
+      - alpha: 0.40
+        tag:   hcp_ml_brain_L_good
+        color: "#4A90D9"
+
+  - label: R_superiorfrontal
+    scenarios:
+      - alpha: 0.10
+        tag:   hcp_ml_brain_R_superiorfrontal_bad
+        color: "#8E44AD"
+      - alpha: 0.40
+        tag:   hcp_ml_brain_R_superiorfrontal_good
+        color: "#BB8FCE"
+
+  - label: L_superiorfrontal
+    scenarios:
+      - alpha: 0.10
+        tag:   hcp_ml_brain_L_superiorfrontal_bad
+        color: "#1ABC9C"
+      - alpha: 0.40
+        tag:   hcp_ml_brain_L_superiorfrontal_good
+        color: "#76D7C4"
+
+  - label: R_parahippocampal
+    scenarios:
+      - alpha: 0.10
+        tag:   hcp_ml_brain_R_parahippocampal_bad
+        color: "#E67E22"
+      - alpha: 0.40
+        tag:   hcp_ml_brain_R_parahippocampal_good
+        color: "#F0B27A"
+
+  - label: L_parahippocampal
+    scenarios:
+      - alpha: 0.10
+        tag:   hcp_ml_brain_L_parahippocampal_bad
+        color: "#2980B9"
+      - alpha: 0.40
+        tag:   hcp_ml_brain_L_parahippocampal_good
+        color: "#7FB3D3"
+
+  - label: R_medialorbitofrontal
+    scenarios:
+      - alpha: 0.10
+        tag:   hcp_ml_brain_R_medialorbitofrontal_bad
+        color: "#C0392B"
+      - alpha: 0.40
+        tag:   hcp_ml_brain_R_medialorbitofrontal_good
+        color: "#E59866"
+
+  - label: L_medialorbitofrontal
+    scenarios:
+      - alpha: 0.10
+        tag:   hcp_ml_brain_L_medialorbitofrontal_bad
+        color: "#117A65"
+      - alpha: 0.40
+        tag:   hcp_ml_brain_L_medialorbitofrontal_good
+        color: "#48C9B0"
+
+# ── AD Braak-staged cascade ───────────────────────────────────────────────────
+ad_cascade:
+  alpha: 0.1

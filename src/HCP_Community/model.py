@@ -257,6 +257,57 @@ def label_communities(labels_arr, method_name, sc_ctx_labels, known_networks,
     return pd.DataFrame(records)
 
 
+def compute_global_network_metrics(sc_ctx, G_w, G_uw):
+    """
+    Network-level (global) structural metrics.
+      - Nodes / Edges
+      - Total streamline weight
+      - Graph density
+      - Average weighted degree (strength)
+      - Average weighted clustering coefficient
+      - Transitivity (global clustering coefficient)
+      - Degree assortativity
+    """
+    m = sc_ctx.sum() / 2
+    return {
+        'Nodes':                         G_uw.number_of_nodes(),
+        'Edges':                         G_uw.number_of_edges(),
+        'Total streamline weight':        float(m),
+        'Graph density':                  float(nx.density(G_uw)),
+        'Avg strength (weighted degree)': float(sc_ctx.sum(axis=1).mean()),
+        'Avg weighted clustering coeff':  float(nx.average_clustering(G_w, weight='weight')),
+        'Transitivity':                   float(nx.transitivity(G_uw)),
+        'Degree assortativity':           float(nx.degree_assortativity_coefficient(G_uw)),
+    }
+
+
+def compute_per_community_Q(sc_ctx, labels):
+    """
+    Per-community modularity contribution.
+    Q_c = e_c - a_c^2
+      e_c = fraction of total weight inside community c
+      a_c = fraction of total strength belonging to community c
+    Sum over all communities equals the global Q.
+    """
+    two_m    = sc_ctx.sum()          # 2m (sum of all weights)
+    strength = sc_ctx.sum(axis=1)    # node strengths
+
+    records = []
+    for cid in np.unique(labels):
+        members = np.where(labels == cid)[0]
+        e_c = sc_ctx[np.ix_(members, members)].sum() / two_m
+        a_c = strength[members].sum() / two_m
+        Q_c = e_c - a_c ** 2
+        records.append({
+            'Community':  cid,
+            'Size':       len(members),
+            'e_c (within weight frac)': round(float(e_c), 5),
+            'a_c (strength frac)':      round(float(a_c), 5),
+            'Q_c (contribution)':       round(float(Q_c), 5),
+        })
+    return pd.DataFrame(records)
+
+
 def participation_coefficient(A, labels):
     """Participation coefficient per node."""
     n_nodes = A.shape[0]
