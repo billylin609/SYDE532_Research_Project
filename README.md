@@ -1,7 +1,15 @@
-# SYDE Classwork
+# SYDE532_Alzheimer's Disease as a Cascading Network Failure
 
 SYDE 532 Final Project, University of Waterloo.
 
-## Tools
+**Authors:** Irtaza Hasan (21031484), Yuchen Lin (21003143)
 
-Python
+# Setup Instruction
+
+```BASH
+git submodule update --init --recursive
+pip install -r requirements.txt
+
+cd ENIGMA
+python setup.py install
+```
